@@ -199,8 +199,13 @@ jobs:
           echo "SIM_UDID=$SIM_UDID"
 
           cd iOSExtract
+          echo "=== Available schemes ==="
+          xcodebuild -list 2>&1 | head -20 || true
+          SCHEME=$(xcodebuild -list 2>&1 | grep -A5 "Schemes:" | grep -v "Schemes:" | grep -v "^$" | head -1 | xargs)
+          echo "Using scheme: $SCHEME"
+          [ -z "$SCHEME" ] && SCHEME="ExtractTests"
           xcodebuild test \
-            -scheme iOSExtract \
+            -scheme "$SCHEME" \
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath .build/xcode \
             2>&1 | tee /tmp/xctest_full.log | \
