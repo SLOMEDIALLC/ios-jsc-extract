@@ -134,41 +134,71 @@ jobs:
               ]
           )
           PKGEOF
+          cat > iOSExtract/Tests/ExtractTests/Info.plist << 'INFOPEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>NSAppTransportSecurity</key>
+              <dict>
+                  <key>NSAllowsArbitraryLoads</key>
+                  <true/>
+                  <key>NSAllowsLocalNetworking</key>
+                  <true/>
+              </dict>
+          </dict>
+          </plist>
+          INFOPEOF
           cat > iOSExtract/Tests/ExtractTests/ExtractTest.swift << 'SWIFTEOF'
           import XCTest
           import WebKit
-          class MsgHandler: NSObject, WKScriptMessageHandler {
-              var logs: [String] = []
-              var isDone = false
-              func userContentController(_ ucc: WKUserContentController, didReceive msg: WKScriptMessage) {
-                  let t = (msg.body as? String) ?? ""
-                  logs.append(t)
-                  if t.contains("[XN SET]") || t.contains("[si] resolved:") || t.contains("P.lr") { isDone = true }
-              }
+          class NavDelegate: NSObject, WKNavigationDelegate {
+              func webView(_ wv: WKWebView, didFinish nav: WKNavigation!) { print("[NAV] didFinish") }
+              func webView(_ wv: WKWebView, didFail nav: WKNavigation!, withError e: Error) { print("[NAV] didFail: \(e)") }
+              func webView(_ wv: WKWebView, didFailProvisionalNavigation nav: WKNavigation!, withError e: Error) { print("[NAV] provisionalFail: \(e)") }
+              func webView(_ wv: WKWebView, didStartProvisionalNavigation nav: WKNavigation!) { print("[NAV] started") }
           }
           class ExtractTest: XCTestCase {
+              var wv: WKWebView?
+              var isDone = false
+              var allLogs = [String]()
+              var pullIndex = 0
+              let navDel = NavDelegate()
               func testExtractJSC() {
-                  let h = MsgHandler()
                   let ucc = WKUserContentController()
-                  ucc.add(h, name: "ioslog")
-                  let js = WKUserScript(source: """
-          (function(){var _c=console.log.bind(console);console.log=function(){var s=Array.prototype.slice.call(arguments).map(function(v){return String(v);}).join(' ');_c(s);try{window.webkit.messageHandlers.ioslog.postMessage(s);}catch(e){}};console.error=function(){console.log.apply(console,arguments);};})();
-          """, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-                  ucc.addUserScript(js)
+                  let captureJS = """
+          (function(){window.__logs=[];window.__done=false;var _c=console.log.bind(console);console.log=function(){var s=Array.prototype.slice.call(arguments).map(function(v){return typeof v==='object'?JSON.stringify(v):String(v);}).join(' ');_c(s);window.__logs.push(s);if(s.indexOf('[XN SET]')>=0||s.indexOf('[si] resolved:')>=0||s.indexOf('P.lr done')>=0){window.__done=true;}};console.error=function(){console.log.apply(console,arguments);};console.warn=function(){console.log.apply(console,arguments);};})();
+          """
+                  ucc.addUserScript(WKUserScript(source: captureJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
                   let cfg = WKWebViewConfiguration()
                   cfg.userContentController = ucc
-                  let wv = WKWebView(frame: CGRect(x:0,y:0,width:390,height:844), configuration: cfg)
-                  wv.load(URLRequest(url: URL(string: "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")!))
+                  wv = WKWebView(frame: CGRect(x:0,y:0,width:390,height:844), configuration: cfg)
+                  wv!.navigationDelegate = navDel
+                  print("[TEST] Loading http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")
+                  wv!.load(URLRequest(url: URL(string: "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")!))
                   let end = Date(timeIntervalSinceNow: 90)
-                  while !h.isDone && Date() < end {
-                      RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+                  while !isDone && Date() < end {
+                      let idx = self.pullIndex
+                      wv!.evaluateJavaScript("(function(){var L=window.__logs||[];var n=L.slice(\(idx));return JSON.stringify({logs:n,done:window.__done||false,rs:document.readyState,url:location.href});})()") { [weak self] res, err in
+                          guard let self = self else { return }
+                          if let err = err { print("[EVAL ERR] \(err)"); return }
+                          guard let str = res as? String, let data = str.data(using: .utf8),
+                                let obj = try? JSONSerialization.jsonObject(with: data) as? [String:Any] else { return }
+                          if let logs = obj["logs"] as? [String], !logs.isEmpty {
+                              self.allLogs.append(contentsOf: logs)
+                              self.pullIndex += logs.count
+                              print("[PULL +\(logs.count)] \(logs.joined(separator: " | "))")
+                          }
+                          if let done = obj["done"] as? Bool, done { self.isDone = true }
+                          if let rs = obj["rs"] as? String { print("[STATUS] readyState=\(rs) totalLogs=\(self.allLogs.count)") }
+                      }
+                      RunLoop.main.run(until: Date(timeIntervalSinceNow: 1.0))
                   }
-                  let out = h.logs.joined(separator: "\n")
+                  let out = allLogs.joined(separator: "\n")
                   print("[iOS JSC OUTPUT START]")
-                  print(out)
+                  print(out.isEmpty ? "(no JS logs)" : out)
                   print("[iOS JSC OUTPUT END]")
                   try? out.write(toFile: "/tmp/ios_jsc_results.txt", atomically: true, encoding: .utf8)
-                  _ = wv
               }
           }
           SWIFTEOF
