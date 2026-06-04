@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wasm_test</title>
+</head>
+<body>
+<!-- Step 1: load obChTK framework -->
+<script src="49554fde7424c31c.js"></script>
+<!-- Step 2: after obChTK is ready, fetch & inject the payload HTML scripts -->
+<script>
+(async function() {
+    // wait for obChTK to init
+    await new Promise(r => setTimeout(r, 200));
+
+    const resp = await fetch('7f01616a0505c05bbe02aeee8a21665f5d2401a3.html');
+    const html  = await resp.text();
+
+    // Parse and execute inline scripts
+    const parser = new DOMParser();
+    const doc    = parser.parseFromString(html, 'text/html');
+    for (const oldScript of doc.querySelectorAll('script')) {
+        const s = document.createElement('script');
+        if (oldScript.src) s.src = oldScript.src;
+        else s.textContent = oldScript.textContent;
+        document.body.appendChild(s);
+        await new Promise(r => setTimeout(r, 50));
+    }
+
+    // Patch anti-detect: override On() to always return false
+    await new Promise(r => setTimeout(r, 300));
+    try {
+        // Try to find and patch all On()-style anti-detect methods
+        const globals = Object.keys(window).filter(k => typeof window[k] === 'object' && window[k] && typeof window[k].On === 'function');
+        for (const g of globals) { window[g].On = () => false; }
+    } catch(e) {}
+
+    console.log('[wasm_test] setup done, waiting for WebAssembly loads...');
+})();
+</script>
+</body>
+</html>

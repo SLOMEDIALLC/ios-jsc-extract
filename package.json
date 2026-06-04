@@ -1,0 +1,10 @@
+{
+  "dependencies": {
+    "js-beautify": "^1.15.4"
+  },
+  "devDependencies": {
+    "playwright": "^1.60.0",
+    "puppeteer": "^25.1.0",
+    "wabt": "^1.0.39"
+  }
+}

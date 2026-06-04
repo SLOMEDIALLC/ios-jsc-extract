@@ -1,0 +1,236 @@
+name: iOS JSC DRM Extract
+
+on:
+  workflow_dispatch:
+    inputs:
+      ios_version:
+        description: 'iOS Simulator version (e.g. iOS-17-5, iOS-18-0)'
+        required: false
+        default: 'latest'
+  push:
+    branches: [ main ]
+
+jobs:
+  # ── Step 1: Try Playwright WebKit on ARM64 macOS ─────────────────────────
+  webkit-arm64:
+    name: Playwright WebKit (ARM64 macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    outputs:
+      xn_set: ${{ steps.check.outputs.xn_set }}
+      e5_value: ${{ steps.check.outputs.e5_value }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright WebKit
+        run: npx playwright install webkit --with-deps
+
+      - name: Run DRM extraction (Playwright WebKit ARM64)
+        id: run_pw
+        run: node playwright_webkit_wasm.js --ci
+        continue-on-error: true
+        env:
+          CI: true
+
+      - name: Check output
+        id: check
+        run: |
+          if [ -f output/result.json ]; then
+            XN=$(cat output/result.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('xn_set','false'))")
+            E5=$(cat output/result.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('e5_value','unknown'))")
+            echo "xn_set=$XN" >> $GITHUB_OUTPUT
+            echo "e5_value=$E5" >> $GITHUB_OUTPUT
+            echo "XN_SET=$XN, E5=$E5"
+          else
+            echo "xn_set=false" >> $GITHUB_OUTPUT
+            echo "e5_value=unknown" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Playwright results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-webkit-arm64
+          path: |
+            output/
+            参考解密完整/wasm/webkit/
+          retention-days: 7
+
+  # ── Step 2: iOS Simulator (real iOS ARM64 JSC) ────────────────────────────
+  ios-simulator:
+    name: iOS Simulator (real iOS JSC)
+    runs-on: macos-latest
+    timeout-minutes: 40
+    needs: webkit-arm64
+    # Run if Playwright didn't get Xn set OR always run for comparison
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: List available iOS Simulators
+        run: |
+          xcrun simctl list runtimes
+          xcrun simctl list devices available | grep -E "iPhone|iPad"
+
+      - name: Boot iOS Simulator (latest iPhone)
+        id: boot_sim
+        run: |
+          # Get latest available iPhone simulator UDID
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys, re
+          data = json.load(sys.stdin)
+          best = None
+          best_ver = (0,0)
+          for runtime, devices in data['devices'].items():
+              m = re.search(r'(\d+)-(\d+)', runtime)
+              if not m: continue
+              ver = (int(m.group(1)), int(m.group(2)))
+              if ver < (14, 0): continue
+              for dev in devices:
+                  if dev.get('isAvailable') and 'iPhone' in dev['name'] and 'SE' not in dev['name']:
+                      if ver > best_ver:
+                          best_ver = ver
+                          best = (dev['udid'], dev['name'], runtime)
+          if best:
+              print(best[0])
+              import sys
+              print(f'Using: {best[1]} on {best[2]}', file=sys.stderr)
+          ")
+          echo "SIM_UDID=$UDID" >> $GITHUB_ENV
+          echo "Booting simulator: $UDID"
+          xcrun simctl boot "$UDID" || true
+          sleep 5
+          xcrun simctl list devices | grep Booted
+
+      - name: Start local HTTP server
+        run: |
+          cd "参考/1DECX7UIQIB1Z/gooll"
+          python3 -m http.server 8766 &
+          echo "HTTP_PID=$!" >> $GITHUB_ENV
+          sleep 2
+          curl -s http://localhost:8766/ > /dev/null && echo "Server OK" || echo "Server FAILED"
+
+      - name: Build iOS extractor app
+        run: |
+          mkdir -p ios_extractor
+          cat > ios_extractor/main.swift << 'SWIFT_EOF'
+          import Foundation
+          import WebKit
+
+          class ExtractorDelegate: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+              var results: [String] = []
+              var done = false
+              var xnSet = false
+
+              func userContentController(_ ucc: WKUserContentController, didReceive msg: WKScriptMessage) {
+                  let text = msg.body as? String ?? String(describing: msg.body)
+                  print("JS: \(text)")
+                  results.append(text)
+                  if text.contains("[XN SET]") { xnSet = true }
+                  if text.contains("[si] resolved:") || text.contains("[done]") { done = true }
+              }
+
+              func webView(_ webView: WKWebView, didFinish nav: WKNavigation!) {
+                  print("Page loaded")
+              }
+          }
+
+          let delegate = ExtractorDelegate()
+          let ucc = WKUserContentController()
+          ucc.add(delegate, name: "relay")
+
+          let captureScript = """
+          (function() {
+              const orig = console.log;
+              console.log = function(...a) {
+                  const s = a.map(String).join(' ');
+                  orig(...a);
+                  try { window.webkit.messageHandlers.relay.postMessage(s); } catch(e) {}
+              };
+          })();
+          """
+          ucc.addUserScript(WKUserScript(source: captureScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+
+          let config = WKWebViewConfiguration()
+          config.userContentController = ucc
+
+          let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
+          webView.navigationDelegate = delegate
+
+          let url = URL(string: "http://localhost:8766/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")!
+          webView.load(URLRequest(url: url))
+
+          // Run for up to 60 seconds
+          let start = Date()
+          while !delegate.done && Date().timeIntervalSince(start) < 60 {
+              RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+          }
+
+          print("=== RESULTS ===")
+          print("XN_SET: \(delegate.xnSet)")
+          delegate.results.forEach { print($0) }
+          exit(delegate.xnSet ? 0 : 1)
+          SWIFT_EOF
+
+          # Compile for macOS (uses macOS WebKit/JSC ARM64)
+          swiftc ios_extractor/main.swift -framework WebKit -framework Foundation \
+            -target arm64-apple-macos12.0 -o ios_extractor/extractor 2>&1 || true
+
+      - name: Run macOS WKWebView extractor
+        id: run_wkwebview
+        run: |
+          ./ios_extractor/extractor 2>&1 | tee output/wkwebview_log.txt || true
+          mkdir -p output
+          echo "WKWebView extraction done"
+        continue-on-error: true
+
+      - name: Run in iOS Simulator via xcrun
+        run: |
+          # Try opening our page in Safari on the simulator
+          # Then use simctl to get logs
+          xcrun simctl openurl "$SIM_UDID" "http://localhost:8766/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html" || true
+          sleep 10
+          # Capture simulator logs
+          xcrun simctl spawn "$SIM_UDID" log stream --style compact --predicate 'processImagePath contains "MobileSafari"' &
+          LOG_PID=$!
+          sleep 15
+          kill $LOG_PID 2>/dev/null || true
+        continue-on-error: true
+
+      - name: Install Playwright and run with iOS UA
+        run: |
+          npx playwright install webkit --with-deps
+          node playwright_webkit_wasm.js --ci 2>&1 | tee output/playwright_sim_log.txt || true
+        continue-on-error: true
+        env:
+          CI: true
+
+      - name: Upload iOS Simulator results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-results
+          path: |
+            output/
+            参考解密完整/wasm/webkit/
+          retention-days: 7
