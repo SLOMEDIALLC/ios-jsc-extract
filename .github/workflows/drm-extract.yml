@@ -72,165 +72,164 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 40
     needs: webkit-arm64
-    # Run if Playwright didn't get Xn set OR always run for comparison
     if: always()
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm install
-
       - name: List available iOS Simulators
-        run: |
-          xcrun simctl list runtimes
-          xcrun simctl list devices available | grep -E "iPhone|iPad"
+        run: xcrun simctl list devices available | grep -E "iPhone 1[5-9]|iPhone 17|iPhone Air"
 
-      - name: Boot iOS Simulator (latest iPhone)
-        id: boot_sim
+      - name: Write patching HTTP server script
         run: |
-          # Get latest available iPhone simulator UDID
-          UDID=$(xcrun simctl list devices available -j | python3 -c "
-          import json, sys, re
-          data = json.load(sys.stdin)
-          best = None
-          best_ver = (0,0)
-          for runtime, devices in data['devices'].items():
-              m = re.search(r'(\d+)-(\d+)', runtime)
-              if not m: continue
-              ver = (int(m.group(1)), int(m.group(2)))
-              if ver < (14, 0): continue
-              for dev in devices:
-                  if dev.get('isAvailable') and 'iPhone' in dev['name'] and 'SE' not in dev['name']:
-                      if ver > best_ver:
-                          best_ver = ver
-                          best = (dev['udid'], dev['name'], runtime)
-          if best:
-              print(best[0])
-              import sys
-              print(f'Using: {best[1]} on {best[2]}', file=sys.stderr)
-          ")
-          echo "SIM_UDID=$UDID" >> $GITHUB_ENV
-          echo "Booting simulator: $UDID"
-          xcrun simctl boot "$UDID" || true
-          sleep 5
-          xcrun simctl list devices | grep Booted
-
-      - name: Start local HTTP server
-        run: |
-          cd "参考/1DECX7UIQIB1Z/gooll"
-          python3 -m http.server 8766 &
+          GOOLL="$GITHUB_WORKSPACE/参考/1DECX7UIQIB1Z/gooll"
+          cat > /tmp/patch_server.py << 'PYEOF'
+          import http.server, socketserver, os, sys
+          SERVE_DIR = sys.argv[1]
+          PORT = int(sys.argv[2])
+          BEEF_ORIG = 'if(e[5]!==6.6){o("");try{o("");c.ws=c.Oi.Co(e[0]);c.ds=c.Oi.Co(e[1]);c.ys=c.Oi.Co(e[2]);c.As=c.Oi.Co(e[3]);c.Us=c.Oi.Co(e[4]);P.zn.Xn=c;t()}catch(t){o(t)}}else window.setTimeout(u,0)'
+          BEEF_PATCH = '{const _sC=(v)=>{try{return c.Oi.Co(v)}catch(_e){return 0n}};console.log("[e5]",typeof e[5],String(e[5]));try{e.forEach((v,i)=>{try{console.log("[e"+i+"]",typeof v,String(v))}catch(_){}});}catch(_){};o("");try{o("");c.ws=_sC(e[0]);c.ds=_sC(e[1]);c.ys=_sC(e[2]);c.As=_sC(e[3]);c.Us=_sC(e[4]);console.log("[XN SET]","ws="+String(c.ws),"ds="+String(c.ds));P.zn.Xn=c;t()}catch(t){o(t);console.log("[JSC ERR]",String(t))}}'
+          class Handler(http.server.SimpleHTTPRequestHandler):
+              def do_GET(self):
+                  p = self.path.split('?')[0].lstrip('/')
+                  full = os.path.join(SERVE_DIR, p)
+                  if '6beef463' in p and os.path.isfile(full):
+                      with open(full, 'r', encoding='utf-8') as f:
+                          content = f.read()
+                      if BEEF_ORIG in content:
+                          content = content.replace(BEEF_ORIG, BEEF_PATCH)
+                          print(f'[server] Patched 6beef463.js')
+                      data = content.encode('utf-8')
+                      self.send_response(200)
+                      self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                      self.send_header('Content-Length', str(len(data)))
+                      self.end_headers()
+                      self.wfile.write(data)
+                  else:
+                      self.directory = SERVE_DIR
+                      super().do_GET()
+              def log_message(self, fmt, *a): pass
+          os.chdir(SERVE_DIR)
+          socketserver.TCPServer.allow_reuse_address = True
+          with socketserver.TCPServer(('', PORT), Handler) as s:
+              print(f'[server] Listening on {PORT}', flush=True)
+              s.serve_forever()
+          PYEOF
+          python3 /tmp/patch_server.py "$GOOLL" 8765 &
           echo "HTTP_PID=$!" >> $GITHUB_ENV
-          sleep 2
-          curl -s http://localhost:8766/ > /dev/null && echo "Server OK" || echo "Server FAILED"
+          sleep 3
+          curl -sf http://127.0.0.1:8765/gooll.html > /dev/null && echo "Server OK" || curl -sf http://127.0.0.1:8765/ > /dev/null && echo "Server OK (root)" || echo "Server check failed (may still work)"
 
-      - name: Build iOS extractor app
+      - name: Create Swift iOS XCTest package
         run: |
-          mkdir -p ios_extractor
-          cat > ios_extractor/main.swift << 'SWIFT_EOF'
-          import Foundation
+          mkdir -p iOSExtract/Tests/ExtractTests
+          cat > iOSExtract/Package.swift << 'PKGEOF'
+          // swift-tools-version: 5.9
+          import PackageDescription
+          let package = Package(
+              name: "iOSExtract",
+              platforms: [.iOS(.v16)],
+              targets: [
+                  .testTarget(name: "ExtractTests", path: "Tests/ExtractTests")
+              ]
+          )
+          PKGEOF
+          cat > iOSExtract/Tests/ExtractTests/ExtractTest.swift << 'SWIFTEOF'
+          import XCTest
           import WebKit
-
-          class ExtractorDelegate: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-              var results: [String] = []
-              var done = false
-              var xnSet = false
-
+          class MsgHandler: NSObject, WKScriptMessageHandler {
+              var logs: [String] = []
+              var isDone = false
               func userContentController(_ ucc: WKUserContentController, didReceive msg: WKScriptMessage) {
-                  let text = msg.body as? String ?? String(describing: msg.body)
-                  print("JS: \(text)")
-                  results.append(text)
-                  if text.contains("[XN SET]") { xnSet = true }
-                  if text.contains("[si] resolved:") || text.contains("[done]") { done = true }
-              }
-
-              func webView(_ webView: WKWebView, didFinish nav: WKNavigation!) {
-                  print("Page loaded")
+                  let t = (msg.body as? String) ?? ""
+                  logs.append(t)
+                  if t.contains("[XN SET]") || t.contains("[si] resolved:") || t.contains("P.lr") { isDone = true }
               }
           }
-
-          let delegate = ExtractorDelegate()
-          let ucc = WKUserContentController()
-          ucc.add(delegate, name: "relay")
-
-          let captureScript = """
-          (function() {
-              const orig = console.log;
-              console.log = function(...a) {
-                  const s = a.map(String).join(' ');
-                  orig(...a);
-                  try { window.webkit.messageHandlers.relay.postMessage(s); } catch(e) {}
-              };
-          })();
-          """
-          ucc.addUserScript(WKUserScript(source: captureScript, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-
-          let config = WKWebViewConfiguration()
-          config.userContentController = ucc
-
-          let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
-          webView.navigationDelegate = delegate
-
-          let url = URL(string: "http://localhost:8766/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")!
-          webView.load(URLRequest(url: url))
-
-          // Run for up to 60 seconds
-          let start = Date()
-          while !delegate.done && Date().timeIntervalSince(start) < 60 {
-              RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+          class ExtractTest: XCTestCase {
+              func testExtractJSC() {
+                  let h = MsgHandler()
+                  let ucc = WKUserContentController()
+                  ucc.add(h, name: "ioslog")
+                  let js = WKUserScript(source: """
+          (function(){var _c=console.log.bind(console);console.log=function(){var s=Array.prototype.slice.call(arguments).map(function(v){return String(v);}).join(' ');_c(s);try{window.webkit.messageHandlers.ioslog.postMessage(s);}catch(e){}};console.error=function(){console.log.apply(console,arguments);};})();
+          """, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+                  ucc.addUserScript(js)
+                  let cfg = WKWebViewConfiguration()
+                  cfg.userContentController = ucc
+                  let wv = WKWebView(frame: CGRect(x:0,y:0,width:390,height:844), configuration: cfg)
+                  wv.load(URLRequest(url: URL(string: "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")!))
+                  let end = Date(timeIntervalSinceNow: 90)
+                  while !h.isDone && Date() < end {
+                      RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.5))
+                  }
+                  let out = h.logs.joined(separator: "\n")
+                  print("[iOS JSC OUTPUT START]")
+                  print(out)
+                  print("[iOS JSC OUTPUT END]")
+                  try? out.write(toFile: "/tmp/ios_jsc_results.txt", atomically: true, encoding: .utf8)
+                  _ = wv
+              }
           }
+          SWIFTEOF
 
-          print("=== RESULTS ===")
-          print("XN_SET: \(delegate.xnSet)")
-          delegate.results.forEach { print($0) }
-          exit(delegate.xnSet ? 0 : 1)
-          SWIFT_EOF
-
-          # Compile for macOS (uses macOS WebKit/JSC ARM64)
-          swiftc ios_extractor/main.swift -framework WebKit -framework Foundation \
-            -target arm64-apple-macos12.0 -o ios_extractor/extractor 2>&1 || true
-
-      - name: Run macOS WKWebView extractor
-        id: run_wkwebview
+      - name: Discover simulator UDID and run XCTest on iOS Simulator
         run: |
-          ./ios_extractor/extractor 2>&1 | tee output/wkwebview_log.txt || true
           mkdir -p output
-          echo "WKWebView extraction done"
-        continue-on-error: true
 
-      - name: Run in iOS Simulator via xcrun
-        run: |
-          # Try opening our page in Safari on the simulator
-          # Then use simctl to get logs
-          xcrun simctl openurl "$SIM_UDID" "http://localhost:8766/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html" || true
-          sleep 10
-          # Capture simulator logs
-          xcrun simctl spawn "$SIM_UDID" log stream --style compact --predicate 'processImagePath contains "MobileSafari"' &
-          LOG_PID=$!
-          sleep 15
-          kill $LOG_PID 2>/dev/null || true
-        continue-on-error: true
+          SIM_UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys,re
+          data=json.load(sys.stdin)
+          best=None; bv=(0,0)
+          for rt,devs in data['devices'].items():
+              m=re.search(r'(\d+)-(\d+)',rt)
+              if not m: continue
+              ver=(int(m.group(1)),int(m.group(2)))
+              for d in devs:
+                  if d.get('isAvailable') and 'iPhone 16' in d['name'] and 'SE' not in d['name']:
+                      if ver>bv: bv=ver; best=d['udid']
+          if not best:
+              for rt,devs in data['devices'].items():
+                  for d in devs:
+                      if d.get('isAvailable') and 'iPhone' in d['name'] and 'SE' not in d['name']:
+                          best=d['udid']; break
+                  if best: break
+          print(best or '')
+          ")
+          echo "SIM_UDID=$SIM_UDID"
 
-      - name: Install Playwright and run with iOS UA
-        run: |
-          npx playwright install webkit --with-deps
-          node playwright_webkit_wasm.js --ci 2>&1 | tee output/playwright_sim_log.txt || true
+          cd iOSExtract
+          xcodebuild test \
+            -scheme iOSExtract \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath .build/xcode \
+            2>&1 | tee /tmp/xctest_full.log | \
+            grep -E "\[e5\]|\[e[0-9]\]|\[XN SET\]|\[JSC ERR\]|\[Co ERR\]|iOS JSC OUTPUT|PASS|FAIL|error:" || true
+
+          cp /tmp/ios_jsc_results.txt ../output/ 2>/dev/null || echo "No results file found"
+          cp /tmp/xctest_full.log ../output/xcodebuild_log.txt
+
+          E5=$(grep '\[e5\]' ../output/xcodebuild_log.txt | tail -1 | sed 's/.*\[e5\]//' || echo "not found")
+          XN=$(grep -c '\[XN SET\]' ../output/xcodebuild_log.txt 2>/dev/null || echo "0")
+          echo "=== SUMMARY: e[5]=$E5  XN_SET_COUNT=$XN ==="
+
+          python3 -c "
+          import re
+          with open('../output/xcodebuild_log.txt') as f: log=f.read()
+          e5=re.findall(r'\[e5\][^\n]*',log)
+          xn=re.findall(r'\[XN SET\][^\n]*',log)
+          ei=[re.findall(r'\[e'+str(i)+r'\][^\n]*',log) for i in range(6)]
+          result={'e5_lines':e5,'xn_lines':xn,'ei_lines':ei}
+          import json
+          print(json.dumps(result,indent=2))
+          with open('../output/ios_summary.json','w') as f: json.dump(result,f,indent=2)
+          "
         continue-on-error: true
-        env:
-          CI: true
 
       - name: Upload iOS Simulator results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ios-simulator-results
-          path: |
-            output/
-            参考解密完整/wasm/webkit/
+          path: output/
           retention-days: 7
