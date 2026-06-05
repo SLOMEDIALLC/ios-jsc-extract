@@ -166,7 +166,7 @@ jobs:
           echo "[CI] Launching app with --console (blocks until app exits or 310s)"
           xcrun simctl launch --console "$SIM_UDID" com.test.iosextract 2>&1 \
             | tee output/sim_log.txt \
-            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[APP\]|XN SET|JSC-FIRE|DECRYPTED|JSC ERR|XHR|JSERR" \
+            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[APP\]|XN SET|JSC-FIRE|DECRYPTED|JSC ERR|XHR|JSERR|U-TICK|PATCH" \
             || true
 
           echo "[CI] App exited"
