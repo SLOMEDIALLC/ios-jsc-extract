@@ -9,7 +9,7 @@ import WebKit
 import AppKit
 
 let TARGET_URL  = "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html"
-let TIMEOUT_SEC: Double = 150
+let TIMEOUT_SEC: Double = 300   // JSC JIT warmup on macOS may need more iterations
 
 // JS injected at document start:
 //  - captures console.log (including [JSC-FIRE], [XN SET] from patched 6beef463)
@@ -72,6 +72,17 @@ let CAPTURE_JS = """
   };
   console.error = function() { console.log.apply(console, arguments); };
   console.warn  = function() { console.log.apply(console, arguments); };
+
+  // 诊断：追踪 window.setTimeout 调用次数（JIT 需要多次迭代才能触发类型混淆）
+  var _setTimeout = window.setTimeout;
+  var _stCount = 0;
+  window.setTimeout = function(fn, delay) {
+    _stCount++;
+    if (_stCount % 200 === 0) {
+      window.__logs.push('[JIT-LOOP] setTimeout count=' + _stCount + ' delay=' + delay);
+    }
+    return _setTimeout.apply(window, arguments);
+  };
 
   // Intercept XHR — the WASM state machine calls U.download() → XHR after
   // decrypting the qbrdr payload; capturing the URL gives us the decrypted path.

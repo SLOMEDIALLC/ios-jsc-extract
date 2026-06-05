@@ -82,7 +82,7 @@ jobs:
   macos-wkwebview:
     name: macOS WKWebView (real JSC ARM64)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     needs: webkit-arm64
     if: always()
 
@@ -112,10 +112,10 @@ jobs:
       - name: Run extractor (real JSC — waits for JIT exploit to fire)
         run: |
           mkdir -p output
-          # extractor self-limits to 150s internally; macOS has no GNU timeout
+          # extractor self-limits to 300s; macOS has no GNU timeout
           /tmp/wkextract 2>&1 \
             | tee output/macos_wk_full.log \
-            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[MACWK\]|XN SET|JSC-FIRE|DECRYPTED_JS_URL|JSC ERR|XHR" \
+            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[MACWK\]|XN SET|JSC-FIRE|DECRYPTED|JSC ERR|XHR|JIT-LOOP" \
             || true
 
           cp /tmp/ios_jsc_results.txt output/ 2>/dev/null || echo "(no results file — extractor may have timed out)"
