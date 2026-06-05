@@ -8,7 +8,8 @@ import os
 import sys
 
 log = ""
-for path in ["output/macos_wk_full.log", "/tmp/ios_jsc_results.txt"]:
+for path in ["output/sim_log.txt", "output/macos_wk_full.log",
+             "output/ios_jsc_results.txt", "/tmp/ios_jsc_results.txt"]:
     if os.path.isfile(path):
         with open(path, errors="replace") as f:
             log += f.read() + "\n"

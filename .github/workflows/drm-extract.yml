@@ -11,11 +11,11 @@ on:
     branches: [ main ]
 
 jobs:
-  # ── Job 1: Playwright WebKit smoke-test (non-JSC, no exploit expected) ──────
+  # ── Job 1: Playwright WebKit smoke-test ─────────────────────────────────────
   webkit-arm64:
     name: Playwright WebKit (ARM64 macOS)
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     outputs:
       xn_set:   ${{ steps.check.outputs.xn_set }}
       e5_value: ${{ steps.check.outputs.e5_value }}
@@ -46,13 +46,13 @@ jobs:
         id: check
         run: |
           if [ -f output/result.json ]; then
-            XN=$(python3 -c "import json,sys; d=json.load(open('output/result.json')); print(d.get('xn_set','false'))")
-            E5=$(python3 -c "import json,sys; d=json.load(open('output/result.json')); print(d.get('e5_value','unknown'))")
+            XN=$(python3 -c "import json; d=json.load(open('output/result.json')); print(d.get('xn_set','false'))")
+            E5=$(python3 -c "import json; d=json.load(open('output/result.json')); print(d.get('e5_value','unknown'))")
             echo "xn_set=$XN"   >> "$GITHUB_OUTPUT"
             echo "e5_value=$E5" >> "$GITHUB_OUTPUT"
             echo "XN_SET=$XN  E5=$E5"
           else
-            echo "xn_set=false"   >> "$GITHUB_OUTPUT"
+            echo "xn_set=false"    >> "$GITHUB_OUTPUT"
             echo "e5_value=unknown" >> "$GITHUB_OUTPUT"
           fi
 
@@ -61,33 +61,51 @@ jobs:
         if: always()
         with:
           name: playwright-webkit-arm64
-          path: |
-            output/
-            参考解密完整/wasm/webkit/
+          path: output/
           retention-days: 7
 
-  # ── Job 2: macOS WKWebView — real Apple JSC, no Simulator sandbox issues ────
+  # ── Job 2: iOS Simulator — real iOS JSC ────────────────────────────────────
   #
-  # Why macOS instead of iOS Simulator:
-  #   The bare XCTest approach (no host app) cannot start WebKit's networking
-  #   process in the iOS Simulator → WKWebView stays stuck at about:blank.
-  #   macOS WKWebView runs directly on the GitHub runner with full JSC JIT
-  #   (DFG + FTL), which is the same JSC engine as iOS Safari.
-  #
-  # Patch fix:
-  #   The OLD patch removed if(e[5]!==6.6), so the code ran immediately with
-  #   wrong constant keys (ws=0xDEAD etc.) — garbage decryption.
-  #   The NEW patch keeps the condition: JSC JIT must fire type-confusion to
-  #   overwrite e[5], then the block runs with real leaked heap-pointer keys.
-  macos-wkwebview:
-    name: macOS WKWebView (real JSC ARM64)
+  # Uses a proper iOS App target (not bare XCTest) so WKWebView's networking
+  # process can start. Built with xcodeproj gem + xcodebuild, installed on
+  # simulator and launched via xcrun simctl.
+  ios-simulator:
+    name: iOS Simulator (real iOS JSC)
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     needs: webkit-arm64
     if: always()
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: List available simulators
+        run: xcrun simctl list devices available | grep -E "iPhone 1[5-9]|iPhone 17|iPhone Air" | head -5
+
+      - name: Get simulator UDID
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "
+          import json,sys,re
+          data=json.load(sys.stdin)
+          best=None; bv=(0,0)
+          for rt,devs in data['devices'].items():
+              m=re.search(r'(\d+)-(\d+)',rt)
+              if not m: continue
+              ver=(int(m.group(1)),int(m.group(2)))
+              for d in devs:
+                  if d.get('isAvailable') and 'iPhone 16' in d['name'] and 'SE' not in d['name']:
+                      if ver>bv: bv=ver; best=d['udid']
+          if not best:
+              for rt,devs in data['devices'].items():
+                  for d in devs:
+                      if d.get('isAvailable') and 'iPhone' in d['name'] and 'SE' not in d['name']:
+                          best=d['udid']; break
+                  if best: break
+          print(best or '')
+          ")
+          echo "UDID=$UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
 
       - name: Start patching HTTP server
         run: |
@@ -97,28 +115,75 @@ jobs:
           sleep 2
           curl -sf http://127.0.0.1:8765/gooll.html > /dev/null \
             && echo "[CI] HTTP server OK" \
-            || echo "[CI] WARNING: server check failed (may still work)"
+            || echo "[CI] WARNING: server check failed"
 
-      - name: Compile macOS WKWebView extractor
+      - name: Install xcodeproj gem
+        run: gem install xcodeproj --quiet 2>/dev/null || true
+
+      - name: Generate Xcode project
         run: |
-          swiftc \
-            -framework WebKit \
-            -framework AppKit \
-            -framework Foundation \
-            "$GITHUB_WORKSPACE/.github/scripts/wkextract.swift" \
-            -o /tmp/wkextract
-          echo "[CI] Compiled wkextract OK"
+          ruby "$GITHUB_WORKSPACE/.github/scripts/gen_xcode_app.rb" \
+            "$GITHUB_WORKSPACE/.github/scripts/ios_extract_app" \
+            "$RUNNER_TEMP/iOSExtract"
 
-      - name: Run extractor (real JSC — waits for JIT exploit to fire)
+      - name: Build iOS app for simulator
+        run: |
+          cd "$RUNNER_TEMP/iOSExtract"
+          echo "=== Available schemes ==="
+          xcodebuild -list 2>&1 | head -10 || true
+
+          xcodebuild build \
+            -project iOSExtract.xcodeproj \
+            -scheme iOSExtract \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath "$RUNNER_TEMP/build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tail -20
+
+      - name: Install and launch app on simulator
         run: |
           mkdir -p output
-          # extractor self-limits to 300s; macOS has no GNU timeout
-          /tmp/wkextract 2>&1 \
-            | tee output/macos_wk_full.log \
-            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[MACWK\]|XN SET|JSC-FIRE|DECRYPTED|JSC ERR|XHR|JIT-LOOP" \
-            || true
+          SIM_UDID="${{ steps.sim.outputs.udid }}"
 
-          cp /tmp/ios_jsc_results.txt output/ 2>/dev/null || echo "(no results file — extractor may have timed out)"
+          # Boot simulator if needed
+          xcrun simctl boot "$SIM_UDID" 2>/dev/null || true
+          sleep 5
+
+          # Find built .app
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSExtract.app" -type d | head -1)
+          echo "App path: $APP_PATH"
+          [ -z "$APP_PATH" ] && echo "ERROR: app not found" && exit 1
+
+          # Install
+          xcrun simctl install "$SIM_UDID" "$APP_PATH"
+          echo "[CI] App installed"
+
+          # Stream simulator logs to file (background)
+          xcrun simctl spawn "$SIM_UDID" log stream \
+            --predicate 'processImagePath contains "iOSExtract"' \
+            2>/dev/null > /tmp/sim_log.txt &
+          LOG_PID=$!
+          sleep 2
+
+          # Launch app
+          xcrun simctl launch "$SIM_UDID" com.test.iosextract
+          echo "[CI] App launched, waiting 160s for JSC exploit..."
+          sleep 160
+
+          # Stop log capture
+          kill $LOG_PID 2>/dev/null || true
+
+          echo "=== Simulator log (tail 50) ==="
+          tail -50 /tmp/sim_log.txt || true
+          cp /tmp/sim_log.txt output/sim_log.txt 2>/dev/null || true
+
+          # Try to get the results file
+          xcrun simctl spawn "$SIM_UDID" \
+            cat /tmp/ios_jsc_results.txt > output/ios_jsc_results.txt 2>/dev/null || true
+          echo "[CI] Done"
         continue-on-error: true
 
       - name: Parse results
