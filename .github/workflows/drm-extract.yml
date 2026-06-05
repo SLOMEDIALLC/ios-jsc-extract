@@ -70,7 +70,7 @@ jobs:
   ios-simulator:
     name: iOS Simulator (real iOS JSC)
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     needs: webkit-arm64
     if: always()
 
@@ -152,51 +152,62 @@ jobs:
           cat > iOSExtract/Tests/ExtractTests/ExtractTest.swift << 'SWIFTEOF'
           import XCTest
           import WebKit
+          let kTargetURL = "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html"
           class NavDelegate: NSObject, WKNavigationDelegate {
-              func webView(_ wv: WKWebView, didFinish nav: WKNavigation!) { print("[NAV] didFinish") }
-              func webView(_ wv: WKWebView, didFail nav: WKNavigation!, withError e: Error) { print("[NAV] didFail: \(e)") }
-              func webView(_ wv: WKWebView, didFailProvisionalNavigation nav: WKNavigation!, withError e: Error) { print("[NAV] provisionalFail: \(e)") }
-              func webView(_ wv: WKWebView, didStartProvisionalNavigation nav: WKNavigation!) { print("[NAV] started") }
+              func webView(_ wv: WKWebView, didFinish n: WKNavigation!) { print("[NAV] didFinish url=\(wv.url?.absoluteString ?? "?")") }
+              func webView(_ wv: WKWebView, didFail n: WKNavigation!, withError e: Error) { print("[NAV] didFail: \(e)") }
+              func webView(_ wv: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { print("[NAV] provisionalFail: \(e)") }
+              func webView(_ wv: WKWebView, didStartProvisionalNavigation n: WKNavigation!) { print("[NAV] started url=\(wv.url?.absoluteString ?? "?")") }
+              func webView(_ wv: WKWebView, didReceiveServerRedirectForProvisionalNavigation n: WKNavigation!) { print("[NAV] redirect url=\(wv.url?.absoluteString ?? "?")") }
           }
           class ExtractTest: XCTestCase {
               var wv: WKWebView?
               var isDone = false
               var allLogs = [String]()
               var pullIndex = 0
+              var lastRetry = Date.distantPast
               let navDel = NavDelegate()
               func testExtractJSC() {
+                  let captureJS = "(function(){window.__logs=[];window.__done=false;window.onerror=function(m,s,l,c,e){window.__logs.push('[JSERR] '+m+' '+s+':'+l);};var _c=console.log.bind(console);console.log=function(){var s=Array.prototype.slice.call(arguments).map(function(v){return typeof v==='object'?JSON.stringify(v):String(v);}).join(' ');_c(s);window.__logs.push(s);if(s.indexOf('[XN SET]')>=0||s.indexOf('[si] resolved:')>=0||s.indexOf('P.lr done')>=0){window.__done=true;}};console.error=function(){console.log.apply(console,arguments);};console.warn=function(){console.log.apply(console,arguments);};})();"
                   let ucc = WKUserContentController()
-                  let captureJS = """
-          (function(){window.__logs=[];window.__done=false;var _c=console.log.bind(console);console.log=function(){var s=Array.prototype.slice.call(arguments).map(function(v){return typeof v==='object'?JSON.stringify(v):String(v);}).join(' ');_c(s);window.__logs.push(s);if(s.indexOf('[XN SET]')>=0||s.indexOf('[si] resolved:')>=0||s.indexOf('P.lr done')>=0){window.__done=true;}};console.error=function(){console.log.apply(console,arguments);};console.warn=function(){console.log.apply(console,arguments);};})();
-          """
                   ucc.addUserScript(WKUserScript(source: captureJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
                   let cfg = WKWebViewConfiguration()
                   cfg.userContentController = ucc
                   wv = WKWebView(frame: CGRect(x:0,y:0,width:390,height:844), configuration: cfg)
                   wv!.navigationDelegate = navDel
-                  print("[TEST] Loading http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")
-                  wv!.load(URLRequest(url: URL(string: "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html")!))
-                  let end = Date(timeIntervalSinceNow: 90)
+                  let targetURL = URL(string: kTargetURL)!
+                  print("[TEST] Starting load, timeout=150s")
+                  wv!.load(URLRequest(url: targetURL))
+                  lastRetry = Date()
+                  let end = Date(timeIntervalSinceNow: 150)
                   while !isDone && Date() < end {
                       let idx = self.pullIndex
+                      let elapsed = -self.lastRetry.timeIntervalSinceNow
                       wv!.evaluateJavaScript("(function(){var L=window.__logs||[];var n=L.slice(\(idx));return JSON.stringify({logs:n,done:window.__done||false,rs:document.readyState,url:location.href});})()") { [weak self] res, err in
                           guard let self = self else { return }
                           if let err = err { print("[EVAL ERR] \(err)"); return }
                           guard let str = res as? String, let data = str.data(using: .utf8),
                                 let obj = try? JSONSerialization.jsonObject(with: data) as? [String:Any] else { return }
+                          let url = obj["url"] as? String ?? ""
+                          let rs = obj["rs"] as? String ?? ""
                           if let logs = obj["logs"] as? [String], !logs.isEmpty {
                               self.allLogs.append(contentsOf: logs)
                               self.pullIndex += logs.count
-                              print("[PULL +\(logs.count)] \(logs.joined(separator: " | "))")
+                              print("[PULL +\(logs.count)] \(logs.prefix(3).joined(separator: " | "))")
                           }
                           if let done = obj["done"] as? Bool, done { self.isDone = true }
-                          if let rs = obj["rs"] as? String { print("[STATUS] readyState=\(rs) totalLogs=\(self.allLogs.count)") }
+                          print("[STATUS] rs=\(rs) url=\(url.prefix(80)) logs=\(self.allLogs.count)")
+                          if (url == "about:blank" || url.isEmpty) && elapsed > 10 {
+                              print("[TEST] Stuck on about:blank after \(Int(elapsed))s, retrying navigation...")
+                              self.wv!.load(URLRequest(url: URL(string: kTargetURL)!))
+                              self.lastRetry = Date()
+                          }
                       }
-                      RunLoop.main.run(until: Date(timeIntervalSinceNow: 1.0))
+                      RunLoop.main.run(until: Date(timeIntervalSinceNow: 2.0))
                   }
                   let out = allLogs.joined(separator: "\n")
                   print("[iOS JSC OUTPUT START]")
-                  print(out.isEmpty ? "(no JS logs)" : out)
+                  print(out.isEmpty ? "(no JS logs captured)" : out)
                   print("[iOS JSC OUTPUT END]")
                   try? out.write(toFile: "/tmp/ios_jsc_results.txt", atomically: true, encoding: .utf8)
               }
@@ -238,8 +249,10 @@ jobs:
             -scheme "$SCHEME" \
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath .build/xcode \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 200 \
             2>&1 | tee /tmp/xctest_full.log | \
-            grep -E "\[e5\]|\[e[0-9]\]|\[XN SET\]|\[JSC ERR\]|\[Co ERR\]|iOS JSC OUTPUT|PASS|FAIL|error:" || true
+            grep -E "\[e5\]|\[e[0-9]\]|\[XN SET\]|\[JSC ERR\]|\[NAV\]|\[STATUS\]|\[PULL\]|\[EVAL\]|iOS JSC OUTPUT|PASS|FAIL|error:" || true
 
           cp /tmp/ios_jsc_results.txt ../output/ 2>/dev/null || echo "No results file found"
           cp /tmp/xctest_full.log ../output/xcodebuild_log.txt
