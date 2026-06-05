@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       ios_version:
-        description: 'iOS Simulator version (e.g. iOS-17-5, iOS-18-0)'
+        description: 'iOS version hint (unused, kept for compat)'
         required: false
         default: 'latest'
   push:
     branches: [ main ]
 
 jobs:
-  # ── Step 1: Try Playwright WebKit on ARM64 macOS ─────────────────────────
+  # ── Job 1: Playwright WebKit smoke-test (non-JSC, no exploit expected) ──────
   webkit-arm64:
     name: Playwright WebKit (ARM64 macOS)
     runs-on: macos-latest
     timeout-minutes: 20
     outputs:
-      xn_set: ${{ steps.check.outputs.xn_set }}
+      xn_set:   ${{ steps.check.outputs.xn_set }}
       e5_value: ${{ steps.check.outputs.e5_value }}
 
     steps:
@@ -35,7 +35,7 @@ jobs:
       - name: Install Playwright WebKit
         run: npx playwright install webkit --with-deps
 
-      - name: Run DRM extraction (Playwright WebKit ARM64)
+      - name: Run DRM extraction (Playwright WebKit)
         id: run_pw
         run: node playwright_webkit_wasm.js --ci
         continue-on-error: true
@@ -46,14 +46,14 @@ jobs:
         id: check
         run: |
           if [ -f output/result.json ]; then
-            XN=$(cat output/result.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('xn_set','false'))")
-            E5=$(cat output/result.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('e5_value','unknown'))")
-            echo "xn_set=$XN" >> $GITHUB_OUTPUT
-            echo "e5_value=$E5" >> $GITHUB_OUTPUT
-            echo "XN_SET=$XN, E5=$E5"
+            XN=$(python3 -c "import json,sys; d=json.load(open('output/result.json')); print(d.get('xn_set','false'))")
+            E5=$(python3 -c "import json,sys; d=json.load(open('output/result.json')); print(d.get('e5_value','unknown'))")
+            echo "xn_set=$XN"   >> "$GITHUB_OUTPUT"
+            echo "e5_value=$E5" >> "$GITHUB_OUTPUT"
+            echo "XN_SET=$XN  E5=$E5"
           else
-            echo "xn_set=false" >> $GITHUB_OUTPUT
-            echo "e5_value=unknown" >> $GITHUB_OUTPUT
+            echo "xn_set=false"   >> "$GITHUB_OUTPUT"
+            echo "e5_value=unknown" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload Playwright results
@@ -66,215 +66,65 @@ jobs:
             参考解密完整/wasm/webkit/
           retention-days: 7
 
-  # ── Step 2: iOS Simulator (real iOS ARM64 JSC) ────────────────────────────
-  ios-simulator:
-    name: iOS Simulator (real iOS JSC)
+  # ── Job 2: macOS WKWebView — real Apple JSC, no Simulator sandbox issues ────
+  #
+  # Why macOS instead of iOS Simulator:
+  #   The bare XCTest approach (no host app) cannot start WebKit's networking
+  #   process in the iOS Simulator → WKWebView stays stuck at about:blank.
+  #   macOS WKWebView runs directly on the GitHub runner with full JSC JIT
+  #   (DFG + FTL), which is the same JSC engine as iOS Safari.
+  #
+  # Patch fix:
+  #   The OLD patch removed if(e[5]!==6.6), so the code ran immediately with
+  #   wrong constant keys (ws=0xDEAD etc.) — garbage decryption.
+  #   The NEW patch keeps the condition: JSC JIT must fire type-confusion to
+  #   overwrite e[5], then the block runs with real leaked heap-pointer keys.
+  macos-wkwebview:
+    name: macOS WKWebView (real JSC ARM64)
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     needs: webkit-arm64
     if: always()
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: List available iOS Simulators
-        run: xcrun simctl list devices available | grep -E "iPhone 1[5-9]|iPhone 17|iPhone Air"
-
-      - name: Write patching HTTP server script
+      - name: Start patching HTTP server
         run: |
           GOOLL="$GITHUB_WORKSPACE/参考/1DECX7UIQIB1Z/gooll"
-          cat > /tmp/patch_server.py << 'PYEOF'
-          import http.server, socketserver, os, sys
-          SERVE_DIR = sys.argv[1]
-          PORT = int(sys.argv[2])
-          BEEF_ORIG = 'if(e[5]!==6.6){o("");try{o("");c.ws=c.Oi.Co(e[0]);c.ds=c.Oi.Co(e[1]);c.ys=c.Oi.Co(e[2]);c.As=c.Oi.Co(e[3]);c.Us=c.Oi.Co(e[4]);P.zn.Xn=c;t()}catch(t){o(t)}}else window.setTimeout(u,0)'
-          BEEF_PATCH = '{const _sC=(v)=>{try{return c.Oi.Co(v)}catch(_e){return 0n}};console.log("[e5]",typeof e[5],String(e[5]));try{e.forEach((v,i)=>{try{console.log("[e"+i+"]",typeof v,String(v))}catch(_){}});}catch(_){};o("");try{o("");c.ws=_sC(e[0]);c.ds=_sC(e[1]);c.ys=_sC(e[2]);c.As=_sC(e[3]);c.Us=_sC(e[4]);console.log("[XN SET]","ws="+String(c.ws),"ds="+String(c.ds));P.zn.Xn=c;t()}catch(t){o(t);console.log("[JSC ERR]",String(t))}}'
-          class Handler(http.server.SimpleHTTPRequestHandler):
-              def do_GET(self):
-                  p = self.path.split('?')[0].lstrip('/')
-                  full = os.path.join(SERVE_DIR, p)
-                  if '6beef463' in p and os.path.isfile(full):
-                      with open(full, 'r', encoding='utf-8') as f:
-                          content = f.read()
-                      if BEEF_ORIG in content:
-                          content = content.replace(BEEF_ORIG, BEEF_PATCH)
-                          print(f'[server] Patched 6beef463.js')
-                      data = content.encode('utf-8')
-                      self.send_response(200)
-                      self.send_header('Content-Type', 'application/javascript; charset=utf-8')
-                      self.send_header('Content-Length', str(len(data)))
-                      self.end_headers()
-                      self.wfile.write(data)
-                  else:
-                      self.directory = SERVE_DIR
-                      super().do_GET()
-              def log_message(self, fmt, *a): pass
-          os.chdir(SERVE_DIR)
-          socketserver.TCPServer.allow_reuse_address = True
-          with socketserver.TCPServer(('', PORT), Handler) as s:
-              print(f'[server] Listening on {PORT}', flush=True)
-              s.serve_forever()
-          PYEOF
-          python3 /tmp/patch_server.py "$GOOLL" 8765 &
-          echo "HTTP_PID=$!" >> $GITHUB_ENV
-          sleep 3
-          curl -sf http://127.0.0.1:8765/gooll.html > /dev/null && echo "Server OK" || curl -sf http://127.0.0.1:8765/ > /dev/null && echo "Server OK (root)" || echo "Server check failed (may still work)"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/patch_server.py" "$GOOLL" 8765 &
+          echo "HTTP_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+          curl -sf http://127.0.0.1:8765/gooll.html > /dev/null \
+            && echo "[CI] HTTP server OK" \
+            || echo "[CI] WARNING: server check failed (may still work)"
 
-      - name: Create Swift iOS XCTest package
+      - name: Compile macOS WKWebView extractor
         run: |
-          mkdir -p iOSExtract/Tests/ExtractTests
-          cat > iOSExtract/Package.swift << 'PKGEOF'
-          // swift-tools-version: 5.9
-          import PackageDescription
-          let package = Package(
-              name: "iOSExtract",
-              platforms: [.iOS(.v16)],
-              targets: [
-                  .testTarget(name: "ExtractTests", path: "Tests/ExtractTests")
-              ]
-          )
-          PKGEOF
-          cat > iOSExtract/Tests/ExtractTests/Info.plist << 'INFOPEOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>NSAppTransportSecurity</key>
-              <dict>
-                  <key>NSAllowsArbitraryLoads</key>
-                  <true/>
-                  <key>NSAllowsLocalNetworking</key>
-                  <true/>
-              </dict>
-          </dict>
-          </plist>
-          INFOPEOF
-          cat > iOSExtract/Tests/ExtractTests/ExtractTest.swift << 'SWIFTEOF'
-          import XCTest
-          import WebKit
-          let kTargetURL = "http://127.0.0.1:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html"
-          class NavDelegate: NSObject, WKNavigationDelegate {
-              func webView(_ wv: WKWebView, didFinish n: WKNavigation!) { print("[NAV] didFinish url=\(wv.url?.absoluteString ?? "?")") }
-              func webView(_ wv: WKWebView, didFail n: WKNavigation!, withError e: Error) { print("[NAV] didFail: \(e)") }
-              func webView(_ wv: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) { print("[NAV] provisionalFail: \(e)") }
-              func webView(_ wv: WKWebView, didStartProvisionalNavigation n: WKNavigation!) { print("[NAV] started url=\(wv.url?.absoluteString ?? "?")") }
-              func webView(_ wv: WKWebView, didReceiveServerRedirectForProvisionalNavigation n: WKNavigation!) { print("[NAV] redirect url=\(wv.url?.absoluteString ?? "?")") }
-          }
-          class ExtractTest: XCTestCase {
-              var wv: WKWebView?
-              var isDone = false
-              var allLogs = [String]()
-              var pullIndex = 0
-              var lastRetry = Date.distantPast
-              let navDel = NavDelegate()
-              func testExtractJSC() {
-                  let captureJS = "(function(){window.__logs=[];window.__done=false;window.onerror=function(m,s,l,c,e){window.__logs.push('[JSERR] '+m+' '+s+':'+l);};var _c=console.log.bind(console);console.log=function(){var s=Array.prototype.slice.call(arguments).map(function(v){return typeof v==='object'?JSON.stringify(v):String(v);}).join(' ');_c(s);window.__logs.push(s);if(s.indexOf('[XN SET]')>=0||s.indexOf('[si] resolved:')>=0||s.indexOf('P.lr done')>=0){window.__done=true;}};console.error=function(){console.log.apply(console,arguments);};console.warn=function(){console.log.apply(console,arguments);};})();"
-                  let ucc = WKUserContentController()
-                  ucc.addUserScript(WKUserScript(source: captureJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
-                  let cfg = WKWebViewConfiguration()
-                  cfg.userContentController = ucc
-                  wv = WKWebView(frame: CGRect(x:0,y:0,width:390,height:844), configuration: cfg)
-                  wv!.navigationDelegate = navDel
-                  let targetURL = URL(string: kTargetURL)!
-                  print("[TEST] Starting load, timeout=150s")
-                  wv!.load(URLRequest(url: targetURL))
-                  lastRetry = Date()
-                  let end = Date(timeIntervalSinceNow: 150)
-                  while !isDone && Date() < end {
-                      let idx = self.pullIndex
-                      let elapsed = -self.lastRetry.timeIntervalSinceNow
-                      wv!.evaluateJavaScript("(function(){var L=window.__logs||[];var n=L.slice(\(idx));return JSON.stringify({logs:n,done:window.__done||false,rs:document.readyState,url:location.href});})()") { [weak self] res, err in
-                          guard let self = self else { return }
-                          if let err = err { print("[EVAL ERR] \(err)"); return }
-                          guard let str = res as? String, let data = str.data(using: .utf8),
-                                let obj = try? JSONSerialization.jsonObject(with: data) as? [String:Any] else { return }
-                          let url = obj["url"] as? String ?? ""
-                          let rs = obj["rs"] as? String ?? ""
-                          if let logs = obj["logs"] as? [String], !logs.isEmpty {
-                              self.allLogs.append(contentsOf: logs)
-                              self.pullIndex += logs.count
-                              print("[PULL +\(logs.count)] \(logs.prefix(3).joined(separator: " | "))")
-                          }
-                          if let done = obj["done"] as? Bool, done { self.isDone = true }
-                          print("[STATUS] rs=\(rs) url=\(url.prefix(80)) logs=\(self.allLogs.count)")
-                          if (url == "about:blank" || url.isEmpty) && elapsed > 10 {
-                              print("[TEST] Stuck on about:blank after \(Int(elapsed))s, retrying navigation...")
-                              self.wv!.load(URLRequest(url: URL(string: kTargetURL)!))
-                              self.lastRetry = Date()
-                          }
-                      }
-                      RunLoop.main.run(until: Date(timeIntervalSinceNow: 2.0))
-                  }
-                  let out = allLogs.joined(separator: "\n")
-                  print("[iOS JSC OUTPUT START]")
-                  print(out.isEmpty ? "(no JS logs captured)" : out)
-                  print("[iOS JSC OUTPUT END]")
-                  try? out.write(toFile: "/tmp/ios_jsc_results.txt", atomically: true, encoding: .utf8)
-              }
-          }
-          SWIFTEOF
+          swiftc \
+            -framework WebKit \
+            -framework AppKit \
+            -framework Foundation \
+            "$GITHUB_WORKSPACE/.github/scripts/wkextract.swift" \
+            -o /tmp/wkextract
+          echo "[CI] Compiled wkextract OK"
 
-      - name: Discover simulator UDID and run XCTest on iOS Simulator
+      - name: Run extractor (real JSC — waits for JIT exploit to fire)
         run: |
           mkdir -p output
+          # 160s hard timeout (extractor self-limits to 150s)
+          timeout 160 /tmp/wkextract 2>&1 \
+            | tee output/macos_wk_full.log \
+            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[MACWK\]|XN SET|JSC-FIRE|DECRYPTED_JS_URL|JSC ERR|XHR" \
+            || true
 
-          SIM_UDID=$(xcrun simctl list devices available -j | python3 -c "
-          import json,sys,re
-          data=json.load(sys.stdin)
-          best=None; bv=(0,0)
-          for rt,devs in data['devices'].items():
-              m=re.search(r'(\d+)-(\d+)',rt)
-              if not m: continue
-              ver=(int(m.group(1)),int(m.group(2)))
-              for d in devs:
-                  if d.get('isAvailable') and 'iPhone 16' in d['name'] and 'SE' not in d['name']:
-                      if ver>bv: bv=ver; best=d['udid']
-          if not best:
-              for rt,devs in data['devices'].items():
-                  for d in devs:
-                      if d.get('isAvailable') and 'iPhone' in d['name'] and 'SE' not in d['name']:
-                          best=d['udid']; break
-                  if best: break
-          print(best or '')
-          ")
-          echo "SIM_UDID=$SIM_UDID"
-
-          cd iOSExtract
-          echo "=== Available schemes ==="
-          xcodebuild -list 2>&1 | head -20 || true
-          SCHEME=$(xcodebuild -list 2>&1 | grep -A5 "Schemes:" | grep -v "Schemes:" | grep -v "^$" | head -1 | xargs)
-          echo "Using scheme: $SCHEME"
-          [ -z "$SCHEME" ] && SCHEME="ExtractTests"
-          xcodebuild test \
-            -scheme "$SCHEME" \
-            -destination "platform=iOS Simulator,id=$SIM_UDID" \
-            -derivedDataPath .build/xcode \
-            -test-timeouts-enabled YES \
-            -default-test-execution-time-allowance 200 \
-            2>&1 | tee /tmp/xctest_full.log | \
-            grep -E "\[e5\]|\[e[0-9]\]|\[XN SET\]|\[JSC ERR\]|\[NAV\]|\[STATUS\]|\[PULL\]|\[EVAL\]|iOS JSC OUTPUT|PASS|FAIL|error:" || true
-
-          cp /tmp/ios_jsc_results.txt ../output/ 2>/dev/null || echo "No results file found"
-          cp /tmp/xctest_full.log ../output/xcodebuild_log.txt
-
-          E5=$(grep '\[e5\]' ../output/xcodebuild_log.txt | tail -1 | sed 's/.*\[e5\]//' || echo "not found")
-          XN=$(grep -c '\[XN SET\]' ../output/xcodebuild_log.txt 2>/dev/null || echo "0")
-          echo "=== SUMMARY: e[5]=$E5  XN_SET_COUNT=$XN ==="
-
-          python3 -c "
-          import re
-          with open('../output/xcodebuild_log.txt') as f: log=f.read()
-          e5=re.findall(r'\[e5\][^\n]*',log)
-          xn=re.findall(r'\[XN SET\][^\n]*',log)
-          ei=[re.findall(r'\[e'+str(i)+r'\][^\n]*',log) for i in range(6)]
-          result={'e5_lines':e5,'xn_lines':xn,'ei_lines':ei}
-          import json
-          print(json.dumps(result,indent=2))
-          with open('../output/ios_summary.json','w') as f: json.dump(result,f,indent=2)
-          "
+          cp /tmp/ios_jsc_results.txt output/ 2>/dev/null || echo "(no results file — extractor may have timed out)"
         continue-on-error: true
 
-      - name: Upload iOS Simulator results
+      - name: Parse results
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/parse_results.py"
+
+      - name: Upload results
         uses: actions/upload-artifact@v4
         if: always()
         with:
