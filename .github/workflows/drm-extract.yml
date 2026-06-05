@@ -161,28 +161,21 @@ jobs:
           xcrun simctl install "$SIM_UDID" "$APP_PATH"
           echo "[CI] App installed"
 
-          # Stream simulator logs to file (background)
-          xcrun simctl spawn "$SIM_UDID" log stream \
-            --predicate 'processImagePath contains "iOSExtract"' \
-            2>/dev/null > /tmp/sim_log.txt &
-          LOG_PID=$!
-          sleep 2
+          # Launch with --console: stdout piped to us, command blocks until app exits
+          # This captures all print() output including [JS], [STATUS], [NAV], [XN SET]
+          echo "[CI] Launching app with --console (blocks until app exits or 310s)"
+          xcrun simctl launch --console "$SIM_UDID" com.test.iosextract 2>&1 \
+            | tee output/sim_log.txt \
+            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[APP\]|XN SET|JSC-FIRE|DECRYPTED|JSC ERR|XHR|JSERR" \
+            || true
 
-          # Launch app
-          xcrun simctl launch "$SIM_UDID" com.test.iosextract
-          echo "[CI] App launched, waiting 320s (framework init ~120s + exploit ~120s)"
-          sleep 320
+          echo "[CI] App exited"
+          cp output/sim_log.txt /tmp/sim_log.txt 2>/dev/null || true
 
-          # Stop log capture
-          kill $LOG_PID 2>/dev/null || true
-
-          echo "=== Simulator log (tail 50) ==="
-          tail -50 /tmp/sim_log.txt || true
-          cp /tmp/sim_log.txt output/sim_log.txt 2>/dev/null || true
-
-          # Try to get the results file
+          # Read results file from inside simulator
           xcrun simctl spawn "$SIM_UDID" \
-            cat /tmp/ios_jsc_results.txt > output/ios_jsc_results.txt 2>/dev/null || true
+            cat /tmp/ios_jsc_results.txt > output/ios_jsc_results.txt 2>/dev/null \
+            || echo "(results file not found in simulator)"
           echo "[CI] Done"
         continue-on-error: true
 

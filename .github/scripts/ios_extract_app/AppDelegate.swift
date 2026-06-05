@@ -15,7 +15,13 @@ let kCaptureJS = """
   // ── 日志捕获 ──────────────────────────────────────────────────────────────
   window.__logs=[];
   window.__done=false;
-  window.onerror=function(m,s,l,c,e){window.__logs.push('[JSERR] '+m+' '+s+':'+l);};
+  window.onerror=function(m,s,l,c,e){
+    window.__logs.push('[JSERR] '+m+' '+s+':'+l+' col='+c);
+    return false; // don't suppress
+  };
+  window.addEventListener('unhandledrejection',function(e){
+    window.__logs.push('[PROMISE_ERR] '+(e.reason?String(e.reason):'unknown'));
+  });
   var _c=console.log.bind(console);
   console.log=function(){
     var s=Array.prototype.slice.call(arguments).map(function(v){
