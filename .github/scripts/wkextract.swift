@@ -17,6 +17,37 @@ let TIMEOUT_SEC: Double = 150
 //  - intercepts window.fetch         → same
 let CAPTURE_JS = """
 (function(){
+  // ── iOS 环境伪装 ──────────────────────────────────────────────────────────
+  // 框架检查 navigator.platform === "MacIntel" && !TouchEvent → 抛出错误
+  // 伪装成 iPhone 让框架继续运行，JSC 漏洞才有机会触发
+  try {
+    Object.defineProperty(navigator, 'platform', {
+      get: function(){ return 'iPhone'; }, configurable: true
+    });
+  } catch(e) {}
+  try {
+    Object.defineProperty(navigator, 'userAgent', {
+      // iOS 17.2 Safari UA，框架会解析出版本号 170200
+      get: function(){
+        return 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) ' +
+               'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 ' +
+               'Mobile/15E148 Safari/604.1';
+      },
+      configurable: true
+    });
+  } catch(e) {}
+  // 加入 TouchEvent 使 P.On() 返回 false（不会抛出错误）
+  if (!window.TouchEvent) {
+    try { window.TouchEvent = function TouchEvent(){}; } catch(e) {}
+  }
+  // maxTouchPoints > 0 让框架选择 iOS 路径
+  try {
+    Object.defineProperty(navigator, 'maxTouchPoints', {
+      get: function(){ return 5; }, configurable: true
+    });
+  } catch(e) {}
+
+  // ── 日志捕获 ─────────────────────────────────────────────────────────────
   window.__logs    = [];
   window.__done    = false;
   window.__pullIdx = 0;
@@ -94,6 +125,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
         wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 1280, height: 900),
                        configuration: cfg)
+        // Set iOS User-Agent at WKWebView level (双保险)
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = self
 
         print("[MACWK] Loading \(TARGET_URL)")
