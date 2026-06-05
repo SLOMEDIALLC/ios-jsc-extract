@@ -72,7 +72,7 @@ jobs:
   ios-simulator:
     name: iOS Simulator (real iOS JSC)
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     needs: webkit-arm64
     if: always()
 
@@ -170,8 +170,8 @@ jobs:
 
           # Launch app
           xcrun simctl launch "$SIM_UDID" com.test.iosextract
-          echo "[CI] App launched, waiting 160s for JSC exploit..."
-          sleep 160
+          echo "[CI] App launched, waiting 320s (framework init ~120s + exploit ~120s)"
+          sleep 320
 
           # Stop log capture
           kill $LOG_PID 2>/dev/null || true
