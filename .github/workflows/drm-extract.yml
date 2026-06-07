@@ -50,7 +50,6 @@ jobs:
             E5=$(python3 -c "import json; d=json.load(open('output/result.json')); print(d.get('e5_value','unknown'))")
             echo "xn_set=$XN"   >> "$GITHUB_OUTPUT"
             echo "e5_value=$E5" >> "$GITHUB_OUTPUT"
-            echo "XN_SET=$XN  E5=$E5"
           else
             echo "xn_set=false"    >> "$GITHUB_OUTPUT"
             echo "e5_value=unknown" >> "$GITHUB_OUTPUT"
@@ -64,25 +63,22 @@ jobs:
           path: output/
           retention-days: 7
 
-  # ── Job 2: iOS Simulator — real iOS JSC ────────────────────────────────────
+  # ── Job 2: BrowserStack 真实 iPhone — 真正的 iOS JSC ──────────────────────
   #
-  # Uses a proper iOS App target (not bare XCTest) so WKWebView's networking
-  # process can start. Built with xcodeproj gem + xcodebuild, installed on
-  # simulator and launched via xcrun simctl.
-  ios-simulator:
-    name: iOS Simulator (real iOS JSC)
+  # 关键：真实 iOS 设备使用真实 iOS JSC（不是 macOS JSC）
+  # pm exploit (Worker + ct()) 的 JSC 内存偏移量在真实 iPhone 上是正确的
+  # 不需要 Worker bypass，让完整 exploit 自然运行
+  browserstack-real-device:
+    name: BrowserStack Real iPhone (iOS JSC)
     runs-on: macos-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     needs: webkit-arm64
     if: always()
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: List available simulators
-        run: xcrun simctl list devices available | grep -E "iPhone 1[5-9]|iPhone 17|iPhone Air" | head -5
-
-      - name: Get simulator UDID
+      - name: Get simulator UDID (for build only)
         id: sim
         run: |
           UDID=$(xcrun simctl list devices available -j | python3 -c "
@@ -94,27 +90,22 @@ jobs:
               if not m: continue
               ver=(int(m.group(1)),int(m.group(2)))
               for d in devs:
-                  if d.get('isAvailable') and 'iPhone 16' in d['name'] and 'SE' not in d['name']:
+                  if d.get('isAvailable') and 'iPhone' in d['name'] and 'SE' not in d['name']:
                       if ver>bv: bv=ver; best=d['udid']
-          if not best:
-              for rt,devs in data['devices'].items():
-                  for d in devs:
-                      if d.get('isAvailable') and 'iPhone' in d['name'] and 'SE' not in d['name']:
-                          best=d['udid']; break
-                  if best: break
           print(best or '')
           ")
-          echo "UDID=$UDID"
           echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          echo "Using simulator UDID for build: $UDID"
 
-      - name: Start patching HTTP server
+      - name: Start patching HTTP server (real-device mode — no Worker bypass)
         run: |
           GOOLL="$GITHUB_WORKSPACE/参考/1DECX7UIQIB1Z/gooll"
-          python3 "$GITHUB_WORKSPACE/.github/scripts/patch_server.py" "$GOOLL" 8765 &
+          python3 "$GITHUB_WORKSPACE/.github/scripts/patch_server.py" \
+            "$GOOLL" 8765 real-device &
           echo "HTTP_PID=$!" >> "$GITHUB_ENV"
           sleep 2
           curl -sf http://127.0.0.1:8765/gooll.html > /dev/null \
-            && echo "[CI] HTTP server OK" \
+            && echo "[CI] HTTP server OK (real-device mode)" \
             || echo "[CI] WARNING: server check failed"
 
       - name: Install xcodeproj gem
@@ -126,61 +117,105 @@ jobs:
             "$GITHUB_WORKSPACE/.github/scripts/ios_extract_app" \
             "$RUNNER_TEMP/iOSExtract"
 
-      - name: Build iOS app for simulator
+      - name: Build iOS app for device (unsigned — BrowserStack resigns)
         run: |
           cd "$RUNNER_TEMP/iOSExtract"
-          echo "=== Available schemes ==="
-          xcodebuild -list 2>&1 | head -10 || true
 
+          # Build for generic iOS device (iphoneos SDK, not simulator)
           xcodebuild build \
             -project iOSExtract.xcodeproj \
             -scheme iOSExtract \
-            -sdk iphonesimulator \
-            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -derivedDataPath "$RUNNER_TEMP/build" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            2>&1 | tail -20
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            2>&1 | tail -20 || true
 
-      - name: Install and launch app on simulator
+          # Fallback: build for simulator if device build fails
+          APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSExtract.app" -type d 2>/dev/null | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "[CI] Device build failed, trying simulator build..."
+            xcodebuild build \
+              -project iOSExtract.xcodeproj \
+              -scheme iOSExtract \
+              -sdk iphonesimulator \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+              -derivedDataPath "$RUNNER_TEMP/build_sim" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGN_IDENTITY="" \
+              CODE_SIGNING_REQUIRED=NO \
+              2>&1 | tail -10 || true
+            APP_PATH=$(find "$RUNNER_TEMP/build_sim" -name "iOSExtract.app" -type d 2>/dev/null | head -1)
+          fi
+
+          echo "APP_PATH=$APP_PATH"
+          [ -z "$APP_PATH" ] && echo "ERROR: build failed" && exit 1
+
+          # Package as .ipa
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -r "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -r iOSExtract.ipa Payload/
+          echo "[CI] IPA created: $(du -h iOSExtract.ipa | cut -f1)"
+
+      - name: Upload IPA to BrowserStack
+        id: upload
+        run: |
+          RESPONSE=$(curl -s -u "${{ secrets.BS_USERNAME }}:${{ secrets.BS_ACCESS_KEY }}" \
+            -X POST "https://api-cloud.browserstack.com/app-automate/upload" \
+            -F "file=@$RUNNER_TEMP/iOSExtract.ipa" \
+            -F "custom_id=iOSExtract")
+          echo "BrowserStack upload response: $RESPONSE"
+          APP_URL=$(echo "$RESPONSE" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('app_url',''))" 2>/dev/null)
+          echo "APP_URL=$APP_URL"
+          [ -z "$APP_URL" ] && echo "ERROR: Upload failed" && exit 1
+          echo "bs_app_url=$APP_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Start BrowserStack Local Tunnel
+        run: |
+          # Download BrowserStack Local binary
+          curl -sL https://www.browserstack.com/browserstack-local/BrowserStackLocal-darwin-x64.gz -o /tmp/BSLocal.gz
+          gunzip /tmp/BSLocal.gz
+          chmod +x /tmp/BrowserStackLocal-darwin-x64
+
+          # Start tunnel — connects cloud iPhone to our patch server
+          /tmp/BrowserStackLocal-darwin-x64 \
+            --key "${{ secrets.BS_ACCESS_KEY }}" \
+            --local-identifier "jsc-extract" \
+            --daemon start \
+            --verbose 1 \
+            --logFile /tmp/bs_local.log
+          sleep 5
+          echo "[CI] BrowserStack Local Tunnel started"
+          cat /tmp/bs_local.log | tail -5 || true
+
+      - name: Install Appium client
+        run: pip3 install Appium-Python-Client requests
+
+      - name: Run on real iPhone via BrowserStack
         run: |
           mkdir -p output
-          SIM_UDID="${{ steps.sim.outputs.udid }}"
-
-          # Boot simulator if needed
-          xcrun simctl boot "$SIM_UDID" 2>/dev/null || true
-          sleep 5
-
-          # Find built .app
-          APP_PATH=$(find "$RUNNER_TEMP/build" -name "iOSExtract.app" -type d | head -1)
-          echo "App path: $APP_PATH"
-          [ -z "$APP_PATH" ] && echo "ERROR: app not found" && exit 1
-
-          # Install
-          xcrun simctl install "$SIM_UDID" "$APP_PATH"
-          echo "[CI] App installed"
-
-          # Launch with --console: stdout piped to us, command blocks until app exits
-          # This captures all print() output including [JS], [STATUS], [NAV], [XN SET]
-          echo "[CI] Launching app with --console (blocks until app exits or 310s)"
-          xcrun simctl launch --console "$SIM_UDID" com.test.iosextract 2>&1 \
-            | tee output/sim_log.txt \
-            | grep -E "\[JS\]|\[NAV\]|\[STATUS\]|\[APP\]|XN SET|JSC-FIRE|DECRYPTED|JSC ERR|XHR|JSERR|U-TICK|PATCH" \
-            || true
-
-          echo "[CI] App exited"
-          cp output/sim_log.txt /tmp/sim_log.txt 2>/dev/null || true
-
-          # Read results file from inside simulator
-          xcrun simctl spawn "$SIM_UDID" \
-            cat /tmp/ios_jsc_results.txt > output/ios_jsc_results.txt 2>/dev/null \
-            || echo "(results file not found in simulator)"
-          echo "[CI] Done"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/bs_run.py" \
+            "${{ steps.upload.outputs.bs_app_url }}" \
+            "jsc-extract" \
+            2>&1 | tee output/bs_run.log
+        env:
+          BS_USERNAME:   ${{ secrets.BS_USERNAME }}
+          BS_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
         continue-on-error: true
 
       - name: Parse results
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/parse_results.py"
+
+      - name: Stop BrowserStack Local Tunnel
+        if: always()
+        run: |
+          /tmp/BrowserStackLocal-darwin-x64 \
+            --key "${{ secrets.BS_ACCESS_KEY }}" \
+            --daemon stop 2>/dev/null || true
 
       - name: Upload results
         uses: actions/upload-artifact@v4

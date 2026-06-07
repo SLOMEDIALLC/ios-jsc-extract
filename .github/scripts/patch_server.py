@@ -16,6 +16,9 @@ import sys
 
 SERVE_DIR = sys.argv[1]
 PORT = int(sys.argv[2])
+# mode: 'simulator' (需要 Worker bypass) | 'real-device' (真实 iOS JSC，不需要 bypass)
+MODE = sys.argv[3] if len(sys.argv) > 3 else 'simulator'
+print(f'[server] Mode: {MODE}', flush=True)
 
 # Original minified code (must match exactly)
 BEEF_ORIG = (
@@ -70,16 +73,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 print('[server] Patched 6beef463.js — JSC exploit instrumented', flush=True)
             else:
                 print('[server] WARNING: BEEF_ORIG not found in 6beef463.js', flush=True)
-            if WORKER_ORIG in content:
-                content = content.replace(WORKER_ORIG, WORKER_PATCH)
-                print('[server] Patched 6beef463.js — Worker phase bypassed, u() starts directly', flush=True)
+            # Worker bypass 只在 Simulator 模式下使用
+            # 真实 iOS JSC (real-device) 偏移量正确，pm exploit 可正常运行，不需要 bypass
+            if MODE == 'simulator':
+                if WORKER_ORIG in content:
+                    content = content.replace(WORKER_ORIG, WORKER_PATCH)
+                    print('[server] [sim] Worker bypass applied', flush=True)
+                if U_DIAG_ORIG in content:
+                    content = content.replace(U_DIAG_ORIG, U_DIAG_PATCH)
+                    print('[server] [sim] u() diagnostic applied', flush=True)
             else:
-                print('[server] WARNING: WORKER_ORIG not found in 6beef463.js', flush=True)
-            if U_DIAG_ORIG in content:
-                content = content.replace(U_DIAG_ORIG, U_DIAG_PATCH)
-                print('[server] Patched 6beef463.js — u() diagnostic logging added', flush=True)
-            else:
-                print('[server] WARNING: U_DIAG_ORIG not found in 6beef463.js', flush=True)
+                print('[server] [real-device] Worker bypass SKIPPED — real iOS JSC handles pm exploit', flush=True)
             data = content.encode('utf-8')
             self.send_response(200)
             self.send_header('Content-Type', 'application/javascript; charset=utf-8')

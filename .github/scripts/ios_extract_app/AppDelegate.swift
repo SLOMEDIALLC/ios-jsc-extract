@@ -151,7 +151,16 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
         print("[iOS JSC OUTPUT START]")
         print(out.isEmpty ? "(no JS logs captured)" : out)
         print("[iOS JSC OUTPUT END]")
+
+        // /tmp/ path for Simulator
         try? out.write(toFile: "/tmp/ios_jsc_results.txt", atomically: true, encoding: .utf8)
+
+        // Documents/ path for real device — readable via Appium getFile
+        if let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            let filePath = docsDir.appendingPathComponent("ios_jsc_results.txt")
+            try? out.write(to: filePath, atomically: true, encoding: .utf8)
+            print("[APP] Results written to \(filePath.path)")
+        }
         exit(0)
     }
 }
