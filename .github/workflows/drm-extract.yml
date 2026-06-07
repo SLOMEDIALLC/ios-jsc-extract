@@ -183,12 +183,14 @@ jobs:
           BROWSERSTACK_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
 
       - name: Install Appium client
-        run: pip3 install Appium-Python-Client requests
+        run: |
+          python3 -m venv /tmp/appium-venv
+          /tmp/appium-venv/bin/pip install --quiet Appium-Python-Client requests
 
       - name: Run on real iPhone via BrowserStack
         run: |
           mkdir -p output
-          python3 "$GITHUB_WORKSPACE/.github/scripts/bs_run.py" \
+          /tmp/appium-venv/bin/python3 "$GITHUB_WORKSPACE/.github/scripts/bs_run.py" \
             "${{ steps.upload.outputs.bs_app_url }}" \
             "jsc-extract" \
             2>&1 | tee output/bs_run.log
