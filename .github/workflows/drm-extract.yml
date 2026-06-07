@@ -175,22 +175,12 @@ jobs:
           echo "bs_app_url=$APP_URL" >> "$GITHUB_OUTPUT"
 
       - name: Start BrowserStack Local Tunnel
-        run: |
-          # Download BrowserStack Local binary
-          curl -sL https://www.browserstack.com/browserstack-local/BrowserStackLocal-darwin-x64.gz -o /tmp/BSLocal.gz
-          gunzip /tmp/BSLocal.gz
-          chmod +x /tmp/BrowserStackLocal-darwin-x64
-
-          # Start tunnel — connects cloud iPhone to our patch server
-          /tmp/BrowserStackLocal-darwin-x64 \
-            --key "${{ secrets.BS_ACCESS_KEY }}" \
-            --local-identifier "jsc-extract" \
-            --daemon start \
-            --verbose 1 \
-            --logFile /tmp/bs_local.log
-          sleep 5
-          echo "[CI] BrowserStack Local Tunnel started"
-          cat /tmp/bs_local.log | tail -5 || true
+        uses: browserstack/github-actions/setup-local@v1.0.1
+        with:
+          local-testing: start
+          local-identifier: jsc-extract
+        env:
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
 
       - name: Install Appium client
         run: pip3 install Appium-Python-Client requests
@@ -211,11 +201,12 @@ jobs:
         run: python3 "$GITHUB_WORKSPACE/.github/scripts/parse_results.py"
 
       - name: Stop BrowserStack Local Tunnel
+        uses: browserstack/github-actions/setup-local@v1.0.1
         if: always()
-        run: |
-          /tmp/BrowserStackLocal-darwin-x64 \
-            --key "${{ secrets.BS_ACCESS_KEY }}" \
-            --daemon stop 2>/dev/null || true
+        with:
+          local-testing: stop
+        env:
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
 
       - name: Upload results
         uses: actions/upload-artifact@v4
