@@ -14,46 +14,43 @@ import base64
 import re
 
 from appium import webdriver
-from appium.options import XCUITestOptions
 
 BS_USER = os.environ["BS_USERNAME"]
 BS_KEY  = os.environ["BS_ACCESS_KEY"]
 APP_URL = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BS_APP_URL", "")
 LOCAL_ID = sys.argv[2] if len(sys.argv) > 2 else "jsc-extract"
 
-# ── 设备配置 ─────────────────────────────────────────────────────────────────
-# iOS 17.x 设备：exploit 的 JSC 内存偏移量基于 iOS 17.2 编写
-# 真实 iOS 17.x JSC → pm exploit 正常工作（不需要 Worker bypass）
-CAPABILITIES = {
-    "platformName":            "iOS",
-    "deviceName":              "iPhone 15",
-    "platformVersion":         "17",        # BrowserStack 会选 17.x 最新版
-    "app":                     APP_URL,
-    "browserstack.user":       BS_USER,
-    "browserstack.key":        BS_KEY,
-    "browserstack.local":      "true",      # 通过 Tunnel 访问我们的 patch server
-    "browserstack.localIdentifier": LOCAL_ID,
-    "browserstack.debug":      "true",
-    "browserstack.networkLogs":"true",
-    "browserstack.appiumLogs": "true",
-    "newCommandTimeout":       400,
-    "fullReset":               False,
-}
-
 APPIUM_HUB = "https://hub.browserstack.com/wd/hub"
 WAIT_SECS  = 330   # 框架初始化 ~120s + exploit 运行时间
+
+# ── 设备配置（兼容所有 Appium Python client 版本）───────────────────────────
+# iOS 17.x 真实设备：JSC 内存偏移量与 exploit 编写时的版本一致
+CAPABILITIES = {
+    "platformName":                    "iOS",
+    "deviceName":                      "iPhone 15",
+    "platformVersion":                 "17",
+    "app":                             APP_URL,
+    "automationName":                  "XCUITest",
+    "browserstack.user":               BS_USER,
+    "browserstack.key":                BS_KEY,
+    "browserstack.local":              "true",
+    "browserstack.localIdentifier":    LOCAL_ID,
+    "browserstack.debug":              "true",
+    "browserstack.networkLogs":        "true",
+    "browserstack.appiumLogs":         "true",
+    "newCommandTimeout":               400,
+    "fullReset":                       False,
+    "noReset":                         True,
+}
 
 def main():
     os.makedirs("output", exist_ok=True)
     print(f"[BS] Connecting to BrowserStack hub…")
     print(f"[BS] App URL: {APP_URL}")
     print(f"[BS] Device: iPhone 15 iOS 17.x")
+    print(f"[BS] Tunnel ID: {LOCAL_ID}")
 
-    options = XCUITestOptions()
-    for k, v in CAPABILITIES.items():
-        options.set_capability(k, v)
-
-    driver = webdriver.Remote(APPIUM_HUB, options=options)
+    driver = webdriver.Remote(APPIUM_HUB, CAPABILITIES)
     session_id = driver.session_id
     print(f"[BS] Session started: {session_id}")
     print(f"[BS] Dashboard: https://app-automate.browserstack.com/builds/{session_id}")
