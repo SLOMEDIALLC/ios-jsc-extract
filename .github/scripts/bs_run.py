@@ -84,6 +84,8 @@ def main():
     except Exception as e:
         print(f"[BS] syslog error: {e}")
 
+    # 等待 BrowserStack 服务器完成日志写入
+    time.sleep(15)
     # 备用：通过 BrowserStack REST API 下载设备日志（NSLog 在这里）
     print("[BS] Downloading device logs via REST API…")
     try:
