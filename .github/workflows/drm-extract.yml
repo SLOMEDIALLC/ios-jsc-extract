@@ -185,7 +185,11 @@ jobs:
       - name: Install Appium client
         run: |
           python3 -m venv /tmp/appium-venv
-          /tmp/appium-venv/bin/pip install --quiet Appium-Python-Client requests
+          # Pin to 2.x — uses webdriver.Remote(url, desired_caps) dict API
+          /tmp/appium-venv/bin/pip install --quiet \
+            'Appium-Python-Client==2.11.1' \
+            'selenium<4.15' \
+            requests
 
       - name: Run on real iPhone via BrowserStack
         run: |
