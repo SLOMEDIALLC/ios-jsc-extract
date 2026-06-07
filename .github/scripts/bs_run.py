@@ -74,7 +74,7 @@ def main():
             pass
 
     # ── 收集日志 ───────────────────────────────────────────────────────────
-    print("[BS] Collecting syslog…")
+    print("[BS] Collecting syslog via Appium…")
     all_logs = []
     try:
         logs = driver.get_log("syslog")
@@ -83,6 +83,28 @@ def main():
             all_logs.append(msg)
     except Exception as e:
         print(f"[BS] syslog error: {e}")
+
+    # 备用：通过 BrowserStack REST API 下载设备日志（NSLog 在这里）
+    print("[BS] Downloading device logs via REST API…")
+    try:
+        import requests as rq
+        sess_url = (f"https://api-cloud.browserstack.com/app-automate"
+                    f"/sessions/{session_id}.json")
+        info = rq.get(sess_url, auth=(BS_USER, BS_KEY)).json()
+        build_id = info.get("automation_session", info).get("build_hashed_id", "")
+        if build_id:
+            dev_url = (f"https://api.browserstack.com/app-automate"
+                       f"/builds/{build_id}/sessions/{session_id}/devicelogs")
+            rest_lines = rq.get(dev_url, auth=(BS_USER, BS_KEY)).text.splitlines()
+            all_logs.extend(rest_lines)
+            print(f"[BS] REST device logs: {len(rest_lines)} lines")
+            # NSLog 行过滤
+            for line in rest_lines:
+                if any(k in line for k in ["[APP]","[NAV]","[JS]","[STATUS]","[XN SET]",
+                                            "[JSC","[PATCH]","[DECRYPTED","[XHR]"]):
+                    print("[DEV]", line.strip())
+    except Exception as e:
+        print(f"[BS] REST log error: {e}")
 
     log_text = "\n".join(all_logs)
     print("[iOS JSC OUTPUT START]")

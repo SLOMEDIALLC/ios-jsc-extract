@@ -96,7 +96,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in self.poll() }
         DispatchQueue.main.asyncAfter(deadline: .now() + kTimeout) { self.finish() }
 
-        print("[APP] Started loading \(kTargetURL)")
+        NSLog("[APP] Started loading \(kTargetURL)")
         return true
     }
 
@@ -112,7 +112,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
         """
         wv.evaluateJavaScript(js) { [weak self] res, err in
             guard let self = self else { return }
-            if let err = err { print("[POLL ERR] \(err)"); return }
+            if let err = err { NSLog("[POLL ERR] \(err)"); return }
             guard let str = res as? String,
                   let d   = str.data(using: .utf8),
                   let obj = try? JSONSerialization.jsonObject(with: d) as? [String:Any] else { return }
@@ -122,12 +122,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
             if let logs = obj["logs"] as? [String], !logs.isEmpty {
                 allLogs.append(contentsOf: logs)
                 pullIdx += logs.count
-                for log in logs { print("[JS] \(log)") }
+                for log in logs { NSLog("[JS] \(log)") }
             }
-            print("[STATUS] rs=\(rs) url=\(String(url.prefix(80))) logs=\(allLogs.count)")
+            NSLog("[STATUS] rs=\(rs) url=\(String(url.prefix(80))) logs=\(allLogs.count)")
 
             if (url == "about:blank" || url.isEmpty) && elapsed > 12 {
-                print("[APP] Stuck on about:blank \(Int(elapsed))s, retrying…")
+                NSLog("[APP] Stuck on about:blank \(Int(elapsed))s, retrying…")
                 self.wv.load(URLRequest(url: URL(string: kTargetURL)!))
                 lastRetry = Date()
             }
@@ -136,21 +136,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
     }
 
     func webView(_ wv: WKWebView, didFinish n: WKNavigation!) {
-        print("[NAV] didFinish url=\(wv.url?.absoluteString ?? "?")")
+        NSLog("[NAV] didFinish url=\(wv.url?.absoluteString ?? "?")")
     }
     func webView(_ wv: WKWebView, didFail n: WKNavigation!, withError e: Error) {
-        print("[NAV] didFail: \(e)")
+        NSLog("[NAV] didFail: \(e)")
     }
     func webView(_ wv: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) {
-        print("[NAV] provisionalFail: \(e)")
+        NSLog("[NAV] provisionalFail: \(e)")
     }
 
     func finish() {
         pollTimer?.invalidate()
         let out = allLogs.joined(separator: "\n")
-        print("[iOS JSC OUTPUT START]")
-        print(out.isEmpty ? "(no JS logs captured)" : out)
-        print("[iOS JSC OUTPUT END]")
+        NSLog("[iOS JSC OUTPUT START]")
+        NSLog("%@", out.isEmpty ? "(no JS logs captured)" : out)
+        NSLog("[iOS JSC OUTPUT END]")
 
         // /tmp/ path for Simulator
         try? out.write(toFile: "/tmp/ios_jsc_results.txt", atomically: true, encoding: .utf8)
@@ -159,7 +159,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
         if let docsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
             let filePath = docsDir.appendingPathComponent("ios_jsc_results.txt")
             try? out.write(to: filePath, atomically: true, encoding: .utf8)
-            print("[APP] Results written to \(filePath.path)")
+            NSLog("[APP] Results written to \(filePath.path)")
         }
         exit(0)
     }
