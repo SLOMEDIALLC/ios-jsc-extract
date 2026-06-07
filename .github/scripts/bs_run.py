@@ -28,8 +28,8 @@ APPIUM_HUB = f"https://{BS_USER}:{BS_KEY}@hub.browserstack.com/wd/hub"
 # ── 设备配置 ─────────────────────────────────────────────────────────────────
 CAPABILITIES = {
     "platformName":                 "iOS",
-    "deviceName":                   "iPhone 15",
-    "platformVersion":              "17",
+    "deviceName":                   "iPhone 14",
+    "platformVersion":              "16",    # iOS 16.x: JSC offsets in exploit match 16.x JSC
     "app":                          APP_URL,
     "automationName":               "XCUITest",
     "browserstack.local":           "true",
@@ -46,7 +46,7 @@ def main():
     os.makedirs("output", exist_ok=True)
     print(f"[BS] Connecting to BrowserStack hub…")
     print(f"[BS] App URL: {APP_URL}")
-    print(f"[BS] Device: iPhone 15 iOS 17.x")
+    print(f"[BS] Device: iPhone 14 iOS 16.x (JSC offsets match iOS 16 exploit)")
     print(f"[BS] Tunnel ID: {LOCAL_ID}")
 
     # Appium-Python-Client 2.x: webdriver.Remote(url, desired_caps)

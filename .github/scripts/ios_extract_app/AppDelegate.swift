@@ -83,7 +83,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
 
         wv = WKWebView(frame: UIScreen.main.bounds, configuration: cfg)
         // iOS UA — framework validates userAgent for Version/X.X or iOS/X.X
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1"
+        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
         wv.navigationDelegate = self
         wv.load(URLRequest(url: URL(string: kTargetURL)!))
         lastRetry = Date()
