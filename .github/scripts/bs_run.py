@@ -14,6 +14,7 @@ import base64
 import re
 
 from appium import webdriver
+from appium.options import AppiumOptions
 
 BS_USER = os.environ["BS_USERNAME"]
 BS_KEY  = os.environ["BS_ACCESS_KEY"]
@@ -50,7 +51,9 @@ def main():
     print(f"[BS] Device: iPhone 15 iOS 17.x")
     print(f"[BS] Tunnel ID: {LOCAL_ID}")
 
-    driver = webdriver.Remote(APPIUM_HUB, CAPABILITIES)
+    options = AppiumOptions()
+    options.load_capabilities(CAPABILITIES)
+    driver = webdriver.Remote(APPIUM_HUB, options=options)
     session_id = driver.session_id
     print(f"[BS] Session started: {session_id}")
     print(f"[BS] Dashboard: https://app-automate.browserstack.com/builds/{session_id}")
