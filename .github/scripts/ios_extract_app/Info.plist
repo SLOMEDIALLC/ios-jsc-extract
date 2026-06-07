@@ -16,8 +16,25 @@
     </dict>
     <key>NSAppTransportSecurity</key>
     <dict>
+        <!-- Allow all HTTP for WKWebView content -->
         <key>NSAllowsArbitraryLoads</key><true/>
+        <key>NSAllowsArbitraryLoadsInWebContent</key><true/>
         <key>NSAllowsLocalNetworking</key><true/>
+        <!-- Explicit exception for BrowserStack Local tunnel domain -->
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>bs-local.com</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionMinimumTLSVersion</key><string>TLSv1.0</string>
+            </dict>
+            <key>localhost</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+                <key>NSIncludesSubdomains</key><false/>
+            </dict>
+        </dict>
     </dict>
 </dict>
 </plist>

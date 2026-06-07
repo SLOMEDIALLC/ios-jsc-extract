@@ -85,15 +85,19 @@ def main():
         print(f"[BS] syslog error: {e}")
 
     # 等待 BrowserStack 服务器完成日志写入
-    time.sleep(15)
+    time.sleep(30)
     # 备用：通过 BrowserStack REST API 下载设备日志（NSLog 在这里）
     print("[BS] Downloading device logs via REST API…")
     try:
         import requests as rq
+        # 先尝试从 app-automate API 获取 build_id
         sess_url = (f"https://api-cloud.browserstack.com/app-automate"
                     f"/sessions/{session_id}.json")
-        info = rq.get(sess_url, auth=(BS_USER, BS_KEY)).json()
+        resp = rq.get(sess_url, auth=(BS_USER, BS_KEY))
+        print(f"[BS] Session API status: {resp.status_code}")
+        info = resp.json()
         build_id = info.get("automation_session", info).get("build_hashed_id", "")
+        print(f"[BS] Build ID: {build_id}")
         if build_id:
             dev_url = (f"https://api.browserstack.com/app-automate"
                        f"/builds/{build_id}/sessions/{session_id}/devicelogs")
