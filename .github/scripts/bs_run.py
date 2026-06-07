@@ -20,27 +20,26 @@ BS_KEY  = os.environ["BS_ACCESS_KEY"]
 APP_URL = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BS_APP_URL", "")
 LOCAL_ID = sys.argv[2] if len(sys.argv) > 2 else "jsc-extract"
 
-APPIUM_HUB = "https://hub.browserstack.com/wd/hub"
 WAIT_SECS  = 330   # 框架初始化 ~120s + exploit 运行时间
 
-# ── 设备配置（兼容所有 Appium Python client 版本）───────────────────────────
-# iOS 17.x 真实设备：JSC 内存偏移量与 exploit 编写时的版本一致
+# 凭证嵌在 URL 里（BrowserStack 标准认证方式）
+APPIUM_HUB = f"https://{BS_USER}:{BS_KEY}@hub.browserstack.com/wd/hub"
+
+# ── 设备配置 ─────────────────────────────────────────────────────────────────
 CAPABILITIES = {
-    "platformName":                    "iOS",
-    "deviceName":                      "iPhone 15",
-    "platformVersion":                 "17",
-    "app":                             APP_URL,
-    "automationName":                  "XCUITest",
-    "browserstack.user":               BS_USER,
-    "browserstack.key":                BS_KEY,
-    "browserstack.local":              "true",
-    "browserstack.localIdentifier":    LOCAL_ID,
-    "browserstack.debug":              "true",
-    "browserstack.networkLogs":        "true",
-    "browserstack.appiumLogs":         "true",
-    "newCommandTimeout":               400,
-    "fullReset":                       False,
-    "noReset":                         True,
+    "platformName":                 "iOS",
+    "deviceName":                   "iPhone 15",
+    "platformVersion":              "17",
+    "app":                          APP_URL,
+    "automationName":               "XCUITest",
+    "browserstack.local":           "true",
+    "browserstack.localIdentifier": LOCAL_ID,
+    "browserstack.debug":           "true",
+    "browserstack.networkLogs":     "true",
+    "browserstack.appiumLogs":      "true",
+    "newCommandTimeout":            400,
+    "fullReset":                    False,
+    "noReset":                      True,
 }
 
 def main():
