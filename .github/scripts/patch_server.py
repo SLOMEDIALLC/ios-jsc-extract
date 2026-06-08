@@ -73,8 +73,53 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 print('[server] Patched 6beef463.js — JSC exploit instrumented', flush=True)
             else:
                 print('[server] WARNING: BEEF_ORIG not found in 6beef463.js', flush=True)
-        # DUMP hook 已移除 — 之前的 g.call hook 破坏了 49554fde.js
-        # P.zn dump 改为在 captureJS（AppDelegate.swift）里执行
+        # 拦截 9af53c1b.js — 注入 WASM 状态机 dump
+        # 在 wA() 的每个状态分支里 dump g.buffer 内容
+        if '9af53c1b' in p and os.path.isfile(full):
+            with open(full, 'r', encoding='utf-8') as f:
+                content = f.read()
+            # 在 TA(M, I, 调用前注入 dump — 这是状态7(UA) POST 的地方
+            TA_ORIG = 'E.TA(M, I, E.NA, E.EA)'
+            TA_PATCH = (
+                'console.log("[STATE7-URL] "+M);'
+                'console.log("[STATE7-BODY-LEN] "+I.length);'
+                'console.log("[STATE7-BODY] "+I.slice(0,2000));'
+                'E.TA(M, I, E.NA, E.EA)'
+            )
+            if TA_ORIG in content:
+                content = content.replace(TA_ORIG, TA_PATCH)
+                print('[server] Patched 9af53c1b.js — STATE7 POST dump added', flush=True)
+            # 在 download 调用前 dump 文件名 — 状态1(wA)
+            DL_ORIG = 'E.download(M, E.UA, E.error)'
+            DL_PATCH = (
+                'console.log("[STATE1-FILE] "+M);'
+                'E.download(M, E.UA, E.error)'
+            )
+            if DL_ORIG in content:
+                content = content.replace(DL_ORIG, DL_PATCH)
+                print('[server] Patched 9af53c1b.js — STATE1 download dump added', flush=True)
+            # 在 LA() 入口 dump 写入的数据
+            LA_ORIG = 'D[1] = M.length, D[0] = BA'
+            LA_PATCH = (
+                'console.log("[LA-WRITE] len="+M.length+" first200="+M.slice(0,200));'
+                'D[1] = M.length, D[0] = BA'
+            )
+            if LA_ORIG in content:
+                content = content.replace(LA_ORIG, LA_PATCH)
+                print('[server] Patched 9af53c1b.js — LA() write dump added', flush=True)
+            # 在 sA() 副作用前 dump — 状态6(TA)
+            SA_ORIG = 'E.sA()'
+            SA_PATCH = 'console.log("[STATE6-SIDE-EFFECT]"),E.sA()'
+            if SA_ORIG in content:
+                content = content.replace(SA_ORIG, SA_PATCH, 1)  # 只替换wA里的第一个
+                print('[server] Patched 9af53c1b.js — STATE6 dump added', flush=True)
+            data = content.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
             # Worker bypass 只在 Simulator 模式下使用
             # 真实 iOS JSC (real-device) 偏移量正确，pm exploit 可正常运行，不需要 bypass
             if MODE == 'simulator':
