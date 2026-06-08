@@ -73,6 +73,35 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 print('[server] Patched 6beef463.js — JSC exploit instrumented', flush=True)
             else:
                 print('[server] WARNING: BEEF_ORIG not found in 6beef463.js', flush=True)
+        # 注入字符串 dump 到 22d56c45 和 710628d3（读取 WASM data 段字符串）
+        if '22d56c45' in p or '710628d3' in p:
+            if os.path.isfile(full):
+                with open(full, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                # 在文件开头注入 dump 钩子：拦截 g.call("open") 和 g.call("stat") 记录路径
+                DUMP_HOOK = (
+                    'var _origGcall;'
+                    'try{_origGcall=g.call;g.call=function(){'
+                    'var a=arguments;var fn=a[0];'
+                    'if(fn==="open"||fn==="stat"||fn==="dlopen"||fn==="dlsym"||fn==="sysctlbyname"||fn==="IORegistryEntryFromPath"){'
+                    'try{var path="";for(var _i=2;_i<a.length;_i++){var v=a[_i];if(typeof v==="bigint"&&v>0x1000n){try{var s="";for(var _j=0;_j<256;_j++){var ch=Number(g.g[0][0][Number(v/4294967296n)>>>0][0][Number(v&0xffffffffn)>>>0])&0xFF;if(ch===0)break;if(ch>=32&&ch<127)s+=String.fromCharCode(ch);}if(s.length>2)console.log("[NATIVE-CALL] "+fn+"(\\""+s+"\\")");break;}catch(e){}}}catch(e){}}'
+                    'return _origGcall.apply(this,a);};'
+                    '}catch(e){}'
+                )
+                if 'function D(a)' in content:
+                    # 在错误处理函数后注入
+                    content = content.replace(
+                        'function D(a){if(C)',
+                        DUMP_HOOK + 'function D(a){if(C)'
+                    )
+                    print(f'[server] Injected NATIVE-CALL dump hook into {p}', flush=True)
+                data = content.encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/javascript; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             # Worker bypass 只在 Simulator 模式下使用
             # 真实 iOS JSC (real-device) 偏移量正确，pm exploit 可正常运行，不需要 bypass
             if MODE == 'simulator':

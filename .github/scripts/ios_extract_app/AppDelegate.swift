@@ -29,6 +29,39 @@ let kCaptureJS = """
     }).join(' ');
     _c(s); window.__logs.push(s);
     if(s.indexOf('[XN SET]')>=0||s.indexOf('[DECRYPTED_JS_URL]')>=0||s.indexOf('[si] resolved')>=0){
+      // exploit成功后 dump WASM data段字符串
+      if(s.indexOf('[XN SET]')>=0){
+        try{
+          // 22d56c45/710628d3 的 g 对象有 .call 方法
+          // 等待模块加载完成后读取 WASM 内存中的字符串表
+          setTimeout(function(){
+            try{
+              // 读取 gAJt dylib 通过 WASM 传入的所有固定路径
+              // H 是 22d56c45 WASM 实例的字符串表指针
+              // 通过 window.c（内存读取函数）dump H 附近的字符串
+              var c = window.c;
+              if(typeof c === 'function'){
+                // dump H 附近 0~3000 偏移的所有可读字符串
+                for(var off=0; off<3000; off+=1){
+                  try{
+                    var ch = c(off) & 0xFF;
+                    if(ch >= 32 && ch < 127){
+                      var str = '';
+                      for(var j=0; j<200 && (c(off+j)&0xFF)>=32; j++){
+                        str += String.fromCharCode(c(off+j)&0xFF);
+                      }
+                      if(str.length > 3){
+                        console.log('[WASM-STR] off='+off+' "'+str+'"');
+                        off += str.length;
+                      }
+                    }
+                  }catch(e2){}
+                }
+              }
+            }catch(e){}
+          }, 3000);
+        }catch(e){}
+      }
       window.__done=true;
     }
   };
