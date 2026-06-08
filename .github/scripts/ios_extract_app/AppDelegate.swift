@@ -29,45 +29,41 @@ let kCaptureJS = """
     }).join(' ');
     _c(s); window.__logs.push(s);
     if(s.indexOf('[XN SET]')>=0||s.indexOf('[DECRYPTED_JS_URL]')>=0||s.indexOf('[si] resolved')>=0){
-      // exploit成功后 dump P.zn.Xn 的内存内容（通过全局 obChTK 访问）
+      // exploit成功后立即 dump（不要延迟，因为 __done=true 会触发退出）
       if(s.indexOf('[XN SET]')>=0){
         try{
-          setTimeout(function(){
-            try{
-              var P = globalThis.obChTK.hPL3On('14669ca3b1519ba2a8f40be287f646d4d7593eb0');
-              var Xn = P.zn.Xn;
-              if(!Xn || !Xn.Er) return;
-              // Xn.Er(address, maxLen) = 读取内存中的 C 字符串
-              // 遍历 gAJt dylib 字符串表（从 Xn 的内存读取能力）
-              // 读取 PhZuiP 数组（9af53c1b 的 SA() 写入的 WASM 二进制数据）
-              var wasm = window.PhZuiP;
-              if(wasm){
-                console.log('[DUMP] PhZuiP length='+wasm.length);
-                // PhZuiP 是 oA 对象打包后的数据，包含字符串表
-                // 扫描其中的 ASCII 字符串
-                var bytes = new Uint8Array(wasm.buffer);
-                var str='', start=0;
-                for(var i=0;i<Math.min(bytes.length,50000);i++){
-                  var b=bytes[i];
-                  if(b>=32&&b<127){
-                    if(str.length===0) start=i;
-                    str+=String.fromCharCode(b);
-                  }else{
-                    if(str.length>4) console.log('[WASM-DATA] off='+start+' \"'+str.slice(0,120)+'\"');
-                    str='';
-                  }
-                }
+          var P = globalThis.obChTK.hPL3On('14669ca3b1519ba2a8f40be287f646d4d7593eb0');
+          // dump P.zn 属性
+          var zn = P.zn;
+          console.log('[P.zn] Tn='+String(zn.Tn)+' pn='+String(zn.pn));
+          console.log('[P.zn] Kn='+String(zn.Kn));
+          console.log('[P.zn] runtime='+zn.runtime+' xn='+zn.xn+' dn='+zn.dn);
+          console.log('[P.zn] Sn='+zn.Sn+' qn='+zn.qn+' kn='+zn.kn+' Qn='+zn.Qn);
+          // dump PhZuiP（WASM 打包数据里的字符串）
+          var wasm = window.PhZuiP;
+          if(wasm){
+            console.log('[DUMP] PhZuiP length='+wasm.length);
+            var bytes = new Uint8Array(wasm.buffer);
+            var str='', start=0;
+            for(var i=0;i<Math.min(bytes.length,50000);i++){
+              var b=bytes[i];
+              if(b>=32&&b<127){
+                if(str.length===0) start=i;
+                str+=String.fromCharCode(b);
+              }else{
+                if(str.length>4) console.log('[WASM-DATA] off='+start+' len='+str.length+' \"'+str.slice(0,150)+'\"');
+                str='';
               }
-              // 也 dump P.zn 的所有属性
-              var zn = P.zn;
-              console.log('[P.zn] Tn='+zn.Tn+' pn='+zn.pn+' Kn='+zn.Kn);
-              console.log('[P.zn] runtime='+zn.runtime+' xn='+zn.xn+' dn='+zn.dn);
-              console.log('[P.zn] Sn='+zn.Sn+' qn='+zn.qn+' kn='+zn.kn+' Qn='+zn.Qn);
-            }catch(e){ console.log('[DUMP-ERR] '+String(e)); }
-          }, 5000);
-        }catch(e){}
+            }
+          } else { console.log('[DUMP] PhZuiP not found'); }
+        }catch(e){ console.log('[DUMP-ERR] '+String(e)); }
       }
-      window.__done=true;
+      // 延迟设置 done，让 dump 日志先输出
+      if(s.indexOf('[XN SET]')>=0){
+        setTimeout(function(){ window.__done=true; }, 8000);
+      } else {
+        window.__done=true;
+      }
     }
   };
   console.error=function(){console.log.apply(console,arguments);};
