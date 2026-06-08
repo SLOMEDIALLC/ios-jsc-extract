@@ -58,28 +58,83 @@ let kCaptureJS = """
           } else { console.log('[DUMP] PhZuiP not found'); }
         }catch(e){ console.log('[DUMP-ERR] '+String(e)); }
       }
-      // 延迟设置 done，让 dump 日志先输出
-      if(s.indexOf('[XN SET]')>=0){
-        setTimeout(function(){ window.__done=true; }, 8000);
-      } else {
-        window.__done=true;
+      // 不要立即退出，等足够长时间让所有 qbrdr 解密 + WASM 状态机 + POST 完成
+      // 30秒后再设置 done
+      if(!window.__doneScheduled){
+        window.__doneScheduled=true;
+        setTimeout(function(){ window.__done=true; }, 30000);
       }
     }
   };
   console.error=function(){console.log.apply(console,arguments);};
   console.warn=function(){console.log.apply(console,arguments);};
 
-  // ── XHR 拦截（捕捉解密后的 JS URL）──────────────────────────────────────
+  // ── XHR 拦截 + 拦截 qbrdr 解密 dump WASM 内存 ──────────────────────────
   var _xhrOpen=XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open=function(m,u){
     if(u){
       window.__logs.push('[XHR] '+m+' '+u);
       if(typeof u==='string'&&u.indexOf('.js')>=0&&u.indexOf('6beef463')<0){
         window.__logs.push('[DECRYPTED_JS_URL] '+u);
-        window.__done=true;
       }
     }
     return _xhrOpen.apply(this,arguments);
+  };
+
+  // ── 拦截 window.qbrdr 调用，dump 解密后的 WASM 内存 ──────────────────────
+  // qbrdr(base64) 被调用时 = 加密数据写入 WASM 内存
+  // 之后 WASM 解密 → 状态机输出结果
+  // 我们 hook LA() 函数（写入 WASM 内存的入口）来追踪状态变化
+  window.__qbrdrCount = 0;
+  window.__wasmDumps = [];
+  var _origQbrdr = null;
+  Object.defineProperty(window, 'qbrdr', {
+    set: function(fn) {
+      _origQbrdr = fn;
+      // 包装 qbrdr 函数
+      var wrapped = function(b64) {
+        window.__qbrdrCount++;
+        console.log('[QBRDR] call #'+window.__qbrdrCount+' base64_len='+b64.length);
+        // 调用原始 qbrdr
+        var result = _origQbrdr(b64);
+        // qbrdr 调用后，WASM 会开始解密
+        // 等一小段时间让 WASM 处理完，然后 dump 状态
+        setTimeout(function(){
+          try {
+            // 尝试找到 WASM buffer 并 dump
+            // PhZuiP 是 9af53c1b.js 创建的
+            if(window.PhZuiP){
+              var bytes = new Uint8Array(window.PhZuiP.buffer);
+              // dump 前 1000 字节的 hex
+              var hex='';
+              for(var i=0;i<Math.min(bytes.length,500);i++) hex+=('0'+bytes[i].toString(16)).slice(-2);
+              console.log('[WASM-DUMP] PhZuiP first500hex='+hex);
+              // 扫描 ASCII 字符串
+              var str='',start=0;
+              for(var i=0;i<Math.min(bytes.length,100000);i++){
+                var b=bytes[i];
+                if(b>=32&&b<127){if(!str.length)start=i;str+=String.fromCharCode(b);}
+                else{if(str.length>5)console.log('[WASM-STR] off='+start+' '+str.slice(0,200));str='';}
+              }
+            }
+          }catch(e){console.log('[DUMP-ERR] '+String(e));}
+        }, 2000);
+        return result;
+      };
+      // 替换为包装版本
+      window['qbrdr'] = wrapped;
+    },
+    get: function() { return _origQbrdr; },
+    configurable: true
+  });
+
+  // ── 拦截 XHR send 来捕获 POST body（状态7 UA 回传数据）──────────────────
+  var _xhrSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function(body) {
+    if(body && body.length > 10) {
+      console.log('[POST-BODY] len='+body.length+' data='+String(body).slice(0,500));
+    }
+    return _xhrSend.apply(this, arguments);
   };
 
   // ── fetch 拦截 ────────────────────────────────────────────────────────────
