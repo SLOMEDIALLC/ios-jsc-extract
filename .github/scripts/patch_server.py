@@ -73,8 +73,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 print('[server] Patched 6beef463.js — JSC exploit instrumented', flush=True)
             else:
                 print('[server] WARNING: BEEF_ORIG not found in 6beef463.js', flush=True)
-        # 注入字符串 dump 到 22d56c45 和 710628d3（读取 WASM data 段字符串）
-        if '22d56c45' in p or '710628d3' in p:
+        # 注入字符串 dump 到框架入口（49554fde）——它包含 MM 字典里的 22d56c45 和 710628d3
+        if '49554fde' in p or '7f01616a' in p:
             if os.path.isfile(full):
                 with open(full, 'r', encoding='utf-8') as f:
                     content = f.read()

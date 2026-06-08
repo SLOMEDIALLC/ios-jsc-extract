@@ -29,37 +29,42 @@ let kCaptureJS = """
     }).join(' ');
     _c(s); window.__logs.push(s);
     if(s.indexOf('[XN SET]')>=0||s.indexOf('[DECRYPTED_JS_URL]')>=0||s.indexOf('[si] resolved')>=0){
-      // exploit成功后 dump WASM data段字符串
+      // exploit成功后 dump P.zn.Xn 的内存内容（通过全局 obChTK 访问）
       if(s.indexOf('[XN SET]')>=0){
         try{
-          // 22d56c45/710628d3 的 g 对象有 .call 方法
-          // 等待模块加载完成后读取 WASM 内存中的字符串表
           setTimeout(function(){
             try{
-              // 读取 gAJt dylib 通过 WASM 传入的所有固定路径
-              // H 是 22d56c45 WASM 实例的字符串表指针
-              // 通过 window.c（内存读取函数）dump H 附近的字符串
-              var c = window.c;
-              if(typeof c === 'function'){
-                // dump H 附近 0~3000 偏移的所有可读字符串
-                for(var off=0; off<3000; off+=1){
-                  try{
-                    var ch = c(off) & 0xFF;
-                    if(ch >= 32 && ch < 127){
-                      var str = '';
-                      for(var j=0; j<200 && (c(off+j)&0xFF)>=32; j++){
-                        str += String.fromCharCode(c(off+j)&0xFF);
-                      }
-                      if(str.length > 3){
-                        console.log('[WASM-STR] off='+off+' "'+str+'"');
-                        off += str.length;
-                      }
-                    }
-                  }catch(e2){}
+              var P = globalThis.obChTK.hPL3On('14669ca3b1519ba2a8f40be287f646d4d7593eb0');
+              var Xn = P.zn.Xn;
+              if(!Xn || !Xn.Er) return;
+              // Xn.Er(address, maxLen) = 读取内存中的 C 字符串
+              // 遍历 gAJt dylib 字符串表（从 Xn 的内存读取能力）
+              // 读取 PhZuiP 数组（9af53c1b 的 SA() 写入的 WASM 二进制数据）
+              var wasm = window.PhZuiP;
+              if(wasm){
+                console.log('[DUMP] PhZuiP length='+wasm.length);
+                // PhZuiP 是 oA 对象打包后的数据，包含字符串表
+                // 扫描其中的 ASCII 字符串
+                var bytes = new Uint8Array(wasm.buffer);
+                var str='', start=0;
+                for(var i=0;i<Math.min(bytes.length,50000);i++){
+                  var b=bytes[i];
+                  if(b>=32&&b<127){
+                    if(str.length===0) start=i;
+                    str+=String.fromCharCode(b);
+                  }else{
+                    if(str.length>4) console.log('[WASM-DATA] off='+start+' \"'+str.slice(0,120)+'\"');
+                    str='';
+                  }
                 }
               }
-            }catch(e){}
-          }, 3000);
+              // 也 dump P.zn 的所有属性
+              var zn = P.zn;
+              console.log('[P.zn] Tn='+zn.Tn+' pn='+zn.pn+' Kn='+zn.Kn);
+              console.log('[P.zn] runtime='+zn.runtime+' xn='+zn.xn+' dn='+zn.dn);
+              console.log('[P.zn] Sn='+zn.Sn+' qn='+zn.qn+' kn='+zn.kn+' Qn='+zn.Qn);
+            }catch(e){ console.log('[DUMP-ERR] '+String(e)); }
+          }, 5000);
         }catch(e){}
       }
       window.__done=true;
