@@ -2,7 +2,7 @@ import UIKit
 import WebKit
 
 let kTargetURL = "http://bs-local.com:8765/7f01616a0505c05bbe02aeee8a21665f5d2401a3.html"
-let kTimeout: Double = 300   // framework init ~2min + exploit loop needs time
+let kTimeout: Double = 600   // framework init ~2min + exploit loop needs time
 
 // Capture JS: spoof iOS env + intercept console.log / XHR / fetch
 let kCaptureJS = """

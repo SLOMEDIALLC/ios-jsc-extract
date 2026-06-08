@@ -95,7 +95,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
     def log_message(self, fmt, *a):
-        pass
+        # 记录所有请求到日志，方便分析 qbrdr 解密后访问了哪些 URL
+        msg = fmt % a
+        print(f'[HTTP] {msg}', flush=True)
 
 
 os.chdir(SERVE_DIR)

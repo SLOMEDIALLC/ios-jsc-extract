@@ -20,7 +20,7 @@ BS_KEY  = os.environ["BS_ACCESS_KEY"]
 APP_URL = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("BS_APP_URL", "")
 LOCAL_ID = sys.argv[2] if len(sys.argv) > 2 else "jsc-extract"
 
-WAIT_SECS  = 330   # 框架初始化 ~120s + exploit 运行时间
+WAIT_SECS  = 630   # 框架初始化 ~120s + exploit ~120s + qbrdr 解密全流程 ~300s
 
 # 凭证嵌在 URL 里（BrowserStack 标准认证方式）
 APPIUM_HUB = f"https://{BS_USER}:{BS_KEY}@hub.browserstack.com/wd/hub"
