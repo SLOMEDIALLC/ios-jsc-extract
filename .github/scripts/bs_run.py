@@ -29,7 +29,7 @@ APPIUM_HUB = f"https://{BS_USER}:{BS_KEY}@hub.browserstack.com/wd/hub"
 CAPABILITIES = {
     "platformName":                 "iOS",
     "deviceName":                   "iPhone 14",
-    "platformVersion":              "16",    # iOS 16.x: JSC offsets in exploit match 16.x JSC
+    "platformVersion":              "16.4",  # 必须精确 16.4，16.5 偏移量不匹配
     "app":                          APP_URL,
     "automationName":               "XCUITest",
     "browserstack.local":           "true",
