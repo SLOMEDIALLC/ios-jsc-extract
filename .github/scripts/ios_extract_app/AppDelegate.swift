@@ -51,7 +51,7 @@ let kCaptureJS = """
                 if(str.length===0) start=i;
                 str+=String.fromCharCode(b);
               }else{
-                if(str.length>4) console.log('[WASM-DATA] off='+start+' len='+str.length+' \"'+str.slice(0,150)+'\"');
+                if(str.length>4) console.log('[WASM-DATA] off='+start+' len='+str.length+' '+str.slice(0,150)+'');
                 str='';
               }
             }
