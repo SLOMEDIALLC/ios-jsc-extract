@@ -28,7 +28,15 @@ let kCaptureJS = """
       return typeof v==='object'?JSON.stringify(v):String(v);
     }).join(' ');
     _c(s); window.__logs.push(s);
-    if(s.indexOf('[XN SET]')>=0||s.indexOf('[DECRYPTED_JS_URL]')>=0||s.indexOf('[si] resolved')>=0){
+    // 追踪所有解密出的 URL（不要在第一个出现时就退出，等 WASM 链跑完）
+    if(s.indexOf('[DECRYPTED_JS_URL]')>=0){
+      if(!window.__decryptedURLs) window.__decryptedURLs=[];
+      window.__decryptedURLs.push(s);
+      window.__lastDecryptTime=Date.now();
+      // 不设 __done=true，等链跑完
+    }
+    // 只在 [XN SET] 时设标记，但不退出
+    if(s.indexOf('[XN SET]')>=0||s.indexOf('[si] resolved')>=0){
       // exploit成功后立即 dump（不要延迟，因为 __done=true 会触发退出）
       if(s.indexOf('[XN SET]')>=0){
         try{
@@ -144,7 +152,10 @@ let kCaptureJS = """
       var u=typeof url==='string'?url:(url&&url.url?url.url:String(url));
       window.__logs.push('[FETCH] '+u);
       if(u.indexOf('.js')>=0&&u.indexOf('6beef463')<0){
-        window.__logs.push('[DECRYPTED_JS_URL] '+u); window.__done=true;
+        window.__logs.push('[DECRYPTED_JS_URL] '+u);
+        if(!window.__decryptedURLs) window.__decryptedURLs=[];
+        window.__decryptedURLs.push(u);
+        window.__lastDecryptTime=Date.now();
       }
       return _f.apply(window,arguments);
     };
@@ -196,7 +207,19 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
         (function(){
           var L=window.__logs||[];
           var n=L.slice(\(idx));
-          return JSON.stringify({logs:n,done:window.__done||false,rs:document.readyState,url:location.href});
+          var urls=window.__decryptedURLs||[];
+          var lastT=window.__lastDecryptTime||0;
+          var idle=lastT>0?(Date.now()-lastT)/1000:-1;
+          // 自动退出条件：有解密URL且60秒没新URL出现（链跑完了）
+          var chainDone=urls.length>0&&idle>60;
+          return JSON.stringify({
+            logs:n,
+            done:window.__done||chainDone,
+            rs:document.readyState,
+            url:location.href,
+            decryptedCount:urls.length,
+            idleSecs:Math.round(idle)
+          });
         })()
         """
         wv.evaluateJavaScript(js) { [weak self] res, err in
@@ -213,7 +236,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate, WKNavigationDelegate {
                 pullIdx += logs.count
                 for log in logs { NSLog("[JS] \(log)") }
             }
-            NSLog("[STATUS] rs=\(rs) url=\(String(url.prefix(80))) logs=\(allLogs.count)")
+            let decryptCount = obj["decryptedCount"] as? Int ?? 0
+            let idleSecs = obj["idleSecs"] as? Int ?? -1
+            NSLog("[STATUS] rs=\(rs) url=\(String(url.prefix(60))) logs=\(allLogs.count) qbrdr_decrypted=\(decryptCount) idle=\(idleSecs)s")
 
             if (url == "about:blank" || url.isEmpty) && elapsed > 12 {
                 NSLog("[APP] Stuck on about:blank \(Int(elapsed))s, retrying…")
