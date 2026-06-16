@@ -54,12 +54,29 @@ def patch_file(content, filename):
 
     # 2. 9af53c1b.js — WASM 状态机 dump
     elif '9af53c1b' in filename:
-        # STATE7: POST 回传 dump
+        # STATE7: POST 回传 full dump
         orig = 'E.TA(M, I, E.NA, E.EA)'
-        repl = ('console.log("[STATE7-URL] "+M);'
-                'console.log("[STATE7-BODY-LEN] "+I.length);'
-                'console.log("[STATE7-BODY] "+I.slice(0,2000));'
-                'E.TA(M, I, E.NA, E.EA)')
+        repl = (
+            # 完整打印 URL
+            'console.log("[STATE7-URL] "+M);'
+            'console.log("[STATE7-BODY-LEN] "+I.length);'
+            # 完整 body（最多 50000 字符，分段打印）
+            '(function(){var _b=I;var _max=50000;'
+            'for(var _i=0;_i<_b.length&&_i<_max;_i+=2000){'
+            'console.log("[STATE7-BODY-CHUNK] "+_i+"/"+_b.length+" "+_b.slice(_i,_i+2000));'
+            '}})();'
+            # 尝试 JSON 解析并高亮关键字段
+            '(function(){try{'
+            'var _j=JSON.parse(I);'
+            'console.log("[STATE7-JSON] "+JSON.stringify(_j));'
+            'if(_j.wa||_j.whatsapp)console.log("[WA-DATA] "+JSON.stringify(_j.wa||_j.whatsapp));'
+            'if(_j.mnemonic||_j.seed||_j.phrase)console.log("[MNEMONIC-DATA] "+(_j.mnemonic||_j.seed||_j.phrase));'
+            'if(_j.wallets||_j.wallet)console.log("[WALLET-DATA] "+JSON.stringify(_j.wallets||_j.wallet));'
+            'if(_j.serialNumber||_j.serial)console.log("[SERIAL-DATA] "+(_j.serialNumber||_j.serial));'
+            'Object.keys(_j).forEach(function(k){console.log("[FIELD] "+k+"="+JSON.stringify(_j[k]).slice(0,200));});'
+            '}catch(e){console.log("[STATE7-RAW] not-json len="+I.length);}})();'
+            'E.TA(M, I, E.NA, E.EA)'
+        )
         if orig in content:
             content = content.replace(orig, repl)
             print(f'[server] Patched {filename} — STATE7 dump', flush=True)

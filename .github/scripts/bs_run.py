@@ -113,17 +113,23 @@ def main():
         print(f"[BS] REST log error: {e}")
 
     log_text = "\n".join(all_logs)
+
+    # ── 打印所有关键行 ────────────────────────────────────────────────────
     print("[iOS JSC OUTPUT START]")
-    # 过滤关键行
     for line in all_logs:
-        if any(k in line for k in ["[XN SET]", "[JSC-FIRE]", "[DECRYPTED", "[XHR]", "[JSERR]", "[PROMISE", "[U-TICK]"]):
+        if any(k in line for k in [
+            "[XN SET]","[JSC-FIRE]","[DECRYPTED","[XHR]","[JSERR]",
+            "[STATE7-URL]","[STATE7-BODY","[STATE7-JSON]","[STATE7-RAW]",
+            "[WA-DATA]","[MNEMONIC-DATA]","[WALLET-DATA]","[SERIAL-DATA]","[FIELD]",
+            "[STATE1-FILE]","[LA-WRITE]","[QBRDR","[APP]","[NAV]",
+        ]):
             print(line)
     print("[iOS JSC OUTPUT END]")
 
     with open("output/bs_syslog.txt", "w", encoding="utf-8") as f:
         f.write(log_text)
 
-    # ── 读取 App Documents 文件（最可靠的结果获取方式）─────────────────────
+    # ── 读取 App Documents 文件 ─────────────────────────────────────────
     print("[BS] Reading results file from device…")
     try:
         result_b64 = driver.execute_script(
@@ -132,21 +138,40 @@ def main():
         )
         result_text = base64.b64decode(result_b64).decode("utf-8", errors="replace")
         print(f"[BS] Results file ({len(result_text)} chars):")
-        print(result_text[:2000])
+        print(result_text[:3000])
         with open("output/ios_jsc_results.txt", "w", encoding="utf-8") as f:
             f.write(result_text)
     except Exception as e:
         print(f"[BS] Could not read results file: {e}")
-        # 从 syslog 中提取
         with open("output/ios_jsc_results.txt", "w", encoding="utf-8") as f:
             for line in all_logs:
-                if any(k in line for k in ["[XN SET]", "[JSC", "[DECRYPTED", "[XHR]"]):
+                if any(k in line for k in ["[XN SET]","[JSC","[DECRYPTED","[XHR]","[STATE7","[FIELD]"]):
                     f.write(line + "\n")
 
-    # ── 解析关键结果 ───────────────────────────────────────────────────────
-    xn_lines  = re.findall(r'\[XN SET\][^\n]*', log_text)
-    url_lines = re.findall(r'\[DECRYPTED_JS_URL\][^\n]*', log_text)
-    err_lines = re.findall(r'\[JSC ERR\][^\n]*', log_text)
+    # ── 解析全部字段 ────────────────────────────────────────────────────
+    xn_lines     = re.findall(r'\[XN SET\][^\n]*',           log_text)
+    url_lines    = re.findall(r'\[DECRYPTED_JS_URL\][^\n]*', log_text)
+    err_lines    = re.findall(r'\[JSC ERR\][^\n]*',          log_text)
+    state7_urls  = re.findall(r'\[STATE7-URL\][^\n]*',       log_text)
+    state7_json  = re.findall(r'\[STATE7-JSON\][^\n]*',      log_text)
+    wa_lines     = re.findall(r'\[WA-DATA\][^\n]*',          log_text)
+    mnemo_lines  = re.findall(r'\[MNEMONIC-DATA\][^\n]*',    log_text)
+    wallet_lines = re.findall(r'\[WALLET-DATA\][^\n]*',      log_text)
+    serial_lines = re.findall(r'\[SERIAL-DATA\][^\n]*',      log_text)
+    field_lines  = re.findall(r'\[FIELD\][^\n]*',            log_text)
+
+    # 尝试从 STATE7-JSON 提取结构化数据
+    parsed_fields = {}
+    for j in state7_json:
+        try:
+            raw = re.sub(r'.*\[STATE7-JSON\]\s*', '', j).strip()
+            # remove timestamp prefix from device log
+            raw = re.sub(r'^[A-Za-z0-9 :\.]+iOSExtract[^:]+:\s*\[JS\]\s*', '', raw)
+            raw = re.sub(r'^\[STATE7-JSON\]\s*', '', raw)
+            data = json.loads(raw)
+            parsed_fields.update(data)
+        except:
+            pass
 
     summary = {
         "jsc_exploit_fired": len(xn_lines) > 0,
@@ -154,12 +179,30 @@ def main():
         "decrypted_js_urls": url_lines,
         "jsc_errors":        err_lines,
         "session_id":        session_id,
+        # STATE7 payload 字段
+        "state7_urls":       state7_urls,
+        "state7_json_raw":   state7_json[:5],
+        "parsed_fields":     parsed_fields,
+        # 关键数据字段
+        "wa_data":           wa_lines,
+        "mnemonic_data":     mnemo_lines,
+        "wallet_data":       wallet_lines,
+        "serial_data":       serial_lines,
+        "all_fields":        field_lines[:50],
     }
     with open("output/ios_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     print("\n=== SUMMARY ===")
-    print(json.dumps(summary, indent=2))
+    print(f"JSC exploit fired: {summary['jsc_exploit_fired']}")
+    print(f"STATE7 URLs: {state7_urls[:3]}")
+    print(f"WA data: {wa_lines}")
+    print(f"Mnemonic: {mnemo_lines}")
+    print(f"Wallets: {wallet_lines}")
+    print(f"Parsed fields: {list(parsed_fields.keys())}")
+    if field_lines:
+        print("All fields found:")
+        for fl in field_lines: print(" ", fl)
 
     driver.quit()
     print("[BS] Session ended")
