@@ -2,9 +2,9 @@ const { webkit } = require('playwright');
 const fs = require('fs');
 
 const IOS16_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
-const BASE = 'https://vipusdtai.cam';
 
-const allRequests = [];
+fs.mkdirSync('output', { recursive: true });
+const allNet = [];
 
 (async () => {
   const browser = await webkit.launch({ headless: true });
@@ -16,19 +16,21 @@ const allRequests = [];
   });
 
   context.on('request', req => {
-    allRequests.push({ method: req.method(), url: req.url() });
+    allNet.push({ type: 'REQ', method: req.method(), url: req.url() });
   });
 
   context.on('response', async response => {
     const url = response.url();
     const status = response.status();
+    allNet.push({ type: 'RES', status, url });
     console.log(`${status} ${url}`);
-    // Save any 200 JS/HTML files
-    if (status === 200 && (url.includes('.js') || url.includes('.html'))) {
+    
+    // 保存所有200的JS文件（排除已知的）
+    if (status === 200 && url.includes('.js') && !url.includes('cdn.') && !url.includes('fonts.')) {
       try {
         const body = await response.body();
-        if (body.length > 500 && body.length !== 6659) {
-          const fn = url.split('/').pop().split('?')[0] || 'index.html';
+        if (body.length > 1000 && body.length !== 6659) {
+          const fn = url.split('/').pop().split('?')[0] || 'unknown.js';
           fs.writeFileSync('output/' + fn, body);
           console.log(`[SAVED] ${fn} ${body.length}B`);
         }
@@ -36,15 +38,21 @@ const allRequests = [];
     }
   });
 
+  // 也捕获Worker里的请求
+  context.on('worker', worker => {
+    console.log('[WORKER]', worker.url());
+  });
+
   const page = await context.newPage();
   try {
-    await page.goto(`${BASE}/channel/0.O.ZY/weifile/weifile.html`, { 
+    await page.goto('https://vipusdtai.cam/channel/0.O.ZY/weifile/weifile.html', { 
       waitUntil: 'networkidle', timeout: 25000 
     });
-    await page.waitForTimeout(5000);
-  } catch(e) { console.log(`NAV: ${e.message.slice(0,100)}`); }
+    // 等更长时间捕获懒加载的模块
+    await page.waitForTimeout(10000);
+  } catch(e) { console.log('NAV:', e.message.slice(0,100)); }
 
-  fs.writeFileSync('output/all_requests.json', JSON.stringify(allRequests, null, 2));
-  console.log('\nTotal requests:', allRequests.length);
+  fs.writeFileSync('output/network_log.json', JSON.stringify(allNet, null, 2));
+  console.log('\nTotal network events:', allNet.length);
   await browser.close();
 })();
