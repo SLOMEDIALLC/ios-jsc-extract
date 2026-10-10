@@ -3,22 +3,10 @@ const fs = require('fs');
 
 const BASE = 'https://tt.axdqx.shop';
 const URL  = BASE + '/?uid=uhtjf_q2ed_test';
-
-const UAs = {
-  '15': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-  '18': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1',
-};
-
-const WANT_PATTERNS = [
-  /ios_\d+_\d+\.json/,
-  /icloud_dumper\.js/, /keychain_copier\.js/, /keychain_dump\.js/,
-  /file_downloader\.js/, /wifi_password.*\.js/,
-  /loader\.js/, /main\.js/,
-  /offsets_sbx1\.js/, /performance\.memory\.js/,
-];
+const UA15 = 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1';
+const UA18 = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1';
 
 fs.mkdirSync('output/profiles', { recursive: true });
-fs.mkdirSync('output/plugins', { recursive: true });
 const saved = {};
 
 async function runUA(label, ua) {
@@ -30,57 +18,57 @@ async function runUA(label, ua) {
     viewport: { width: 390, height: 844 }
   });
 
-  ctx.on('response', async res => {
-    const url = res.url();
-    const status = res.status();
-    const fname = url.split('/').pop().split('?')[0];
-    
-    const isWanted = WANT_PATTERNS.some(p => p.test(fname)) ||
-                     url.includes('/profiles/') || url.includes('/plugins/');
+  // 用route()拦截所有请求，保存响应body
+  await ctx.route('**', async route => {
+    const req = route.request();
+    const response = await route.fetch();
+    const url = req.url();
+    const status = response.status();
 
-    if (status === 200 && isWanted) {
-      try {
-        const body = await res.body();
-        if (body.length > 50) {
-          let outPath;
-          if (url.includes('/profiles/')) {
-            outPath = `output/profiles/${fname}`;
-          } else if (url.includes('/plugins/')) {
-            const cve = url.match(/CVE-[\d-]+/);
-            if (cve) {
-              fs.mkdirSync(`output/plugins/${cve[0]}`, { recursive: true });
-              outPath = `output/plugins/${cve[0]}/exploit.js`;
-            } else outPath = `output/${fname}`;
-          } else {
-            outPath = `output/${fname}`;
-          }
-          if (!saved[outPath]) {
-            saved[outPath] = body.length;
+    if (status === 200) {
+      const fname = url.split('/').pop().split('?')[0];
+      const isProfile = url.includes('/profiles/') && fname.endsWith('.json');
+      const isWanted = isProfile ||
+        /icloud_dumper|keychain|file_downloader|wifi_password|offsets_sbx1|performance\.memory/.test(fname);
+
+      if (isWanted && !saved[fname]) {
+        try {
+          const body = await response.body();
+          if (body.length > 10) {
+            let outPath;
+            if (isProfile) {
+              outPath = `output/profiles/${fname}`;
+            } else {
+              outPath = `output/${fname}`;
+            }
             fs.writeFileSync(outPath, body);
-            console.log(`[SAVED] ${outPath} ${body.length}B  ← ${url}`);
+            saved[fname] = body.length;
+            console.log(`[SAVED] ${outPath}  ${body.length}B  ← ${url}`);
           }
+        } catch(e) {
+          console.log(`[ERR] ${fname}: ${e.message}`);
         }
-      } catch(e) {}
+      }
+
+      if (!url.includes('statistic') && !url.includes('fonts.')) {
+        console.log(`  ${status} ${url.replace(BASE,'')}`);
+      }
     }
-    
-    // 打印所有非静态请求
-    if (!url.includes('fonts.') && !url.includes('statistic') && !url.includes('tailwind')) {
-      console.log(`  ${status} ${url.replace(BASE, '')}`);
-    }
+    await route.fulfill({ response });
   });
 
   const page = await ctx.newPage();
   try {
     await page.goto(URL, { waitUntil: 'load', timeout: 20000 });
-    await page.waitForTimeout(25000);
+    console.log('[*] Loaded, waiting 20s...');
+    await page.waitForTimeout(20000);
   } catch(e) { console.log('NAV:', e.message.slice(0,80)); }
   await browser.close();
 }
 
 (async () => {
-  for (const [label, ua] of Object.entries(UAs)) {
-    await runUA(label, ua);
-  }
+  await runUA('15', UA15);
+  await runUA('18', UA18);
   
   console.log('\n=== Saved ===');
   Object.entries(saved).forEach(([k,v]) => console.log(`  ${k}: ${v}B`));
