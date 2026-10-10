@@ -1,0 +1,52 @@
+name: Fetch Axdqx Missing Files (Real iOS Safari)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch-real-ios:
+    name: BrowserStack Real iPhone Safari
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install selenium requests
+
+      - name: Start BrowserStack Local
+        uses: browserstack/github-actions/setup-local@v1.0.1
+        with:
+          local-testing: start
+          local-identifier: axdqx-fetch
+        env:
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
+
+      - name: Run Safari on Real iOS via BrowserStack
+        run: python3 .github/scripts/fetch_axdqx.py
+        env:
+          BS_USERNAME:   ${{ secrets.BS_USERNAME }}
+          BS_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
+        timeout-minutes: 15
+
+      - name: Stop BrowserStack Local
+        uses: browserstack/github-actions/setup-local@v1.0.1
+        if: always()
+        with:
+          local-testing: stop
+        env:
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BS_ACCESS_KEY }}
+
+      - name: Upload captured files
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: axdqx-missing-files
+          path: output/
+          retention-days: 7
