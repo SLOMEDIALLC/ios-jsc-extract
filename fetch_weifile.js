@@ -3,64 +3,72 @@ const fs = require('fs');
 
 const BASE = 'https://tt.axdqx.shop';
 const URL  = BASE + '/?uid=uhtjf_q2ed_test';
-const UAs = {
-  '15': 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1',
-  '18': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1',
-};
+const UA15 = 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1';
 
 fs.mkdirSync('output/profiles', { recursive: true });
-const saved = {};
 
-async function runUA(label, ua) {
-  console.log(`\n[*] iOS ${label}`);
+(async () => {
   const browser = await webkit.launch({ headless: true });
   const ctx = await browser.newContext({
-    userAgent: ua, locale: 'zh-CN',
-    timezoneId: 'Asia/Shanghai', viewport: { width:390, height:844 }
-  });
-
-  // 只拦截 http/https，跳过 blob:
-  await ctx.route(/^https?:\/\//, async route => {
-    const req = route.request();
-    const reqUrl = req.url();
-    try {
-      const resp = await route.fetch();
-      const status = resp.status();
-      const fname = reqUrl.split('/').pop().split('?')[0];
-      const isProfile = reqUrl.includes('/profiles/') && fname.endsWith('.json');
-      const isWanted = isProfile ||
-        /icloud_dumper|keychain|file_downloader|wifi_password|offsets_sbx1/.test(fname);
-
-      if (status === 200 && isWanted && !saved[fname]) {
-        const body = await resp.body();
-        if (body.length > 10) {
-          const outPath = isProfile ? `output/profiles/${fname}` : `output/${fname}`;
-          fs.writeFileSync(outPath, body);
-          saved[fname] = body.length;
-          console.log(`[SAVED] ${outPath}  ${body.length}B`);
-        }
-      }
-      if (!reqUrl.includes('statistic') && !reqUrl.includes('fonts.'))
-        console.log(`  ${status} ${reqUrl.replace(BASE,'')}`);
-      await route.fulfill({ response: resp });
-    } catch(e) {
-      console.log(`[ROUTE_ERR] ${reqUrl.slice(0,80)}: ${e.message.slice(0,60)}`);
-      await route.continue();
-    }
+    userAgent: UA15, locale:'zh-CN',
+    timezoneId:'Asia/Shanghai', viewport:{width:390,height:844}
   });
 
   const page = await ctx.newPage();
+  
+  // 先正常加载页面，让rce_loader执行完整
+  console.log('[*] Loading page with iOS 15 UA...');
   try {
     await page.goto(URL, { waitUntil:'load', timeout:20000 });
-    console.log('[*] Loaded, waiting 20s...');
-    await page.waitForTimeout(20000);
+    // 等待页面执行到加载profiles的时机（约8秒）
+    await page.waitForTimeout(8000);
   } catch(e) { console.log('NAV:', e.message.slice(0,80)); }
-  await browser.close();
-}
 
-(async () => {
-  for (const [label, ua] of Object.entries(UAs)) await runUA(label, ua);
-  console.log('\n=== Saved ===');
-  Object.entries(saved).forEach(([k,v]) => console.log(`  ${k}: ${v}B`));
-  fs.writeFileSync('output/summary.json', JSON.stringify(saved, null, 2));
+  // 在页面上下文内直接fetch ios_15_0.json（带有完整session/cookie）
+  console.log('[*] Fetching ios_15_0.json from page context...');
+  const result = await page.evaluate(async () => {
+    try {
+      const r = await fetch('https://tt.axdqx.shop/profiles/ios_15_0.json?t=' + Date.now(), {
+        credentials: 'include',
+        headers: { 'Referer': 'https://tt.axdqx.shop/frame.html' }
+      });
+      if (!r.ok) return { ok: false, status: r.status };
+      const text = await r.text();
+      return { ok: true, status: r.status, text, size: text.length };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  console.log('[*] Result:', JSON.stringify({...result, text: result.text ? result.text.slice(0,100) : undefined}));
+
+  if (result.ok && result.text && result.text.length > 10) {
+    fs.writeFileSync('output/profiles/ios_15_0.json', result.text);
+    console.log(`[SAVED] output/profiles/ios_15_0.json  ${result.size}B`);
+  }
+
+  // 也试其他缺失文件
+  const WANT = ['icloud_dumper.js','keychain_copier.js','file_downloader.js',
+                'wifi_password_dump.js','wifi_password_securityd.js','loader.js'];
+  for (const f of WANT) {
+    const r2 = await page.evaluate(async (fname) => {
+      try {
+        const r = await fetch('https://tt.axdqx.shop/' + fname + '?t=' + Date.now(), {
+          credentials:'include', headers:{Referer:'https://tt.axdqx.shop/frame.html'}
+        });
+        if (!r.ok) return {ok:false,status:r.status};
+        const text = await r.text();
+        return {ok:true,status:r.status,text,size:text.length};
+      } catch(e) { return {ok:false,error:e.message}; }
+    }, f);
+    if (r2.ok && r2.size > 100) {
+      fs.writeFileSync(`output/${f}`, r2.text);
+      console.log(`[SAVED] output/${f}  ${r2.size}B`);
+    } else {
+      console.log(`[${r2.status||r2.error}] ${f}`);
+    }
+  }
+
+  fs.writeFileSync('output/result.json', JSON.stringify({done: true}));
+  await browser.close();
 })();
