@@ -1,71 +1,69 @@
 const { webkit } = require('playwright');
 const fs = require('fs');
 
-const BASE = 'https://tt.axdqx.shop';
-const UA15 = 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.3 Mobile/15E148 Safari/604.1';
+const C2 = 'https://sqwas.shapelie.com:8881';
+const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Mobile/15E148 Safari/604.1';
 
-fs.mkdirSync('output/profiles', { recursive: true });
-const saved = {};
+fs.mkdirSync('output', { recursive: true });
+const results = {};
 
 (async () => {
   const browser = await webkit.launch({ headless: true });
   const ctx = await browser.newContext({
-    userAgent: UA15, locale: 'zh-CN',
-    timezoneId: 'Asia/Shanghai', viewport: { width:390, height:844 }
+    userAgent: UA, locale: 'zh-CN',
+    viewport: { width: 390, height: 844 },
+    ignoreHTTPSErrors: true
   });
 
-  // 纯监听，不拦截
   ctx.on('response', async res => {
     const url = res.url();
     const status = res.status();
-    if (!url.includes('statistic')) console.log(`  ${status} ${url.replace(BASE,'')}`);
-    
-    if (status === 200 && url.includes('/profiles/')) {
+    console.log(`${status} ${url}`);
+    if (status === 200) {
       try {
         const body = await res.body();
-        const fname = url.split('/').pop().split('?')[0];
-        if (body.length > 50 && !body.toString().includes('<!DOCTYPE')) {
-          fs.writeFileSync(`output/profiles/${fname}`, body);
-          saved[fname] = body.length;
-          console.log(`[SAVED] profiles/${fname}  ${body.length}B`);
-        } else {
-          console.log(`[SKIP] profiles/${fname}  ${body.length}B (HTML)`);
+        const fname = url.split('/').pop().split('?')[0] || 'index';
+        if (body.length > 0 && body.length < 10000000) {
+          fs.writeFileSync('output/' + fname, body);
+          results[url] = body.length;
+          console.log(`[SAVED] ${fname} ${body.length}B`);
         }
-      } catch(e) { console.log(`[ERR] ${e.message.slice(0,60)}`); }
+      } catch(e) {}
     }
   });
 
   const page = await ctx.newPage();
-  try {
-    console.log('[*] Loading with iOS 15.3 UA...');
-    await page.goto(`${BASE}/?uid=uhtjf_q2ed_test`, { waitUntil:'load', timeout:20000 });
-    // 等待足够长：rce_loader需要加载完 angle_webgl 后才fetch profiles（约15-20秒）
-    console.log('[*] Waiting 35s for full chain...');
-    await page.waitForTimeout(35000);
-  } catch(e) { console.log('NAV:', e.message.slice(0,80)); }
 
-  // 补：直接在页面上下文里用XHR同步请求（模拟getJS）
-  for (const fname of ['ios_15_0.json', 'ios_15_3.json', 'ios_15_4.json', 'ios_15_5.json']) {
-    if (saved[fname]) continue;
-    const r = await page.evaluate(async (url) => {
-      return new Promise(resolve => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('GET', url, false); // 同步，和getJS一样
-        try { xhr.send(null); } catch(e) { resolve({ok:false,err:e.message}); return; }
-        resolve({ ok: xhr.status===200, status: xhr.status, text: xhr.responseText });
-      });
-    }, `${BASE}/profiles/${fname}?${Date.now()}`).catch(()=>({ok:false}));
-    
-    console.log(`[XHR] ${fname}: ${r.status||r.err}  ${r.text?r.text.length+'B':''}`);
-    if (r.ok && r.text && r.text.length > 50 && !r.text.includes('<!DOCTYPE')) {
-      fs.writeFileSync(`output/profiles/${fname}`, r.text);
-      saved[fname] = r.text.length;
-      console.log(`[SAVED] ${fname}`);
+  // 探测所有可能的路由
+  const paths = ['/', '/upload', '/api', '/admin', '/result', '/data', '/files',
+                 '/status', '/health', '/ping', '/info', '/api/upload', '/api/result',
+                 '/api/data', '/api/files', '/api/status'];
+
+  for (const path of paths) {
+    for (const port of [8881, 8882]) {
+      const url = `https://sqwas.shapelie.com:${port}${path}`;
+      try {
+        const resp = await page.evaluate(async (u) => {
+          try {
+            const r = await fetch(u, { method: 'GET', mode: 'no-cors' });
+            return { ok: r.ok, status: r.status, type: r.type };
+          } catch(e) { return { error: e.message }; }
+        }, url);
+        console.log(`[FETCH] ${url}: ${JSON.stringify(resp)}`);
+      } catch(e) {}
     }
   }
 
-  console.log('\n=== Done ===');
-  Object.entries(saved).forEach(([k,v]) => console.log(`  ${k}: ${v}B`));
-  fs.writeFileSync('output/summary.json', JSON.stringify(saved, null, 2));
+  // 也直接navigate
+  try {
+    await page.goto(`${C2}/`, { waitUntil: 'load', timeout: 15000 });
+    await page.waitForTimeout(3000);
+    const content = await page.content();
+    fs.writeFileSync('output/c2_root.html', content);
+    console.log(`[PAGE] c2_root.html ${content.length}B`);
+  } catch(e) { console.log('[PAGE ERR]', e.message.slice(0,80)); }
+
+  fs.writeFileSync('output/results.json', JSON.stringify(results, null, 2));
+  console.log('\nDone:', Object.keys(results).length, 'files');
   await browser.close();
 })();
