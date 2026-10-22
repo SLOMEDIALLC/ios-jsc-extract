@@ -1,4 +1,4 @@
-const { webkit } = require('playwright');
+const { chromium } = require('playwright');
 const https = require('https');
 const http = require('http');
 const fs = require('fs');
@@ -36,7 +36,7 @@ function dlFile(url, dest) {
 }
 
 (async () => {
-  const browser = await webkit.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({
     userAgent: UA, locale: 'zh-CN', timezoneId: 'Asia/Shanghai',
     viewport: { width: 390, height: 844 }, ignoreHTTPSErrors: true
