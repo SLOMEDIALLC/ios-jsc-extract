@@ -1,4 +1,4 @@
-name: Fetch IPA
+name: Fetch IPA Simple
 
 on:
   workflow_dispatch:
@@ -8,61 +8,56 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 10
     steps:
-      - name: Install Playwright and fetch IPA
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch IPA
         run: |
+          mkdir -p output
           npm install playwright
           npx playwright install webkit --with-deps
-          
-          cat > /tmp/get_ipa.js << 'JSEOF'
-          const { webkit } = require('/Users/runner/work/_temp/../../../npm_modules/playwright');
-          JSEOF
-          
-          node -e "
+          node << 'EOF'
           const { webkit } = require('playwright');
           const fs = require('fs');
           fs.mkdirSync('output', { recursive: true });
-          (async() => {
-            const br = await webkit.launch({ headless: true });
+          (async()=>{
+            const br = await webkit.launch({headless:true});
             const ctx = await br.newContext({
-              userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15',
-              ignoreHTTPSErrors: true, acceptDownloads: true
+              userAgent:'Mozilla/5.0 (iPhone; CPU iPhone OS 18_4 like Mac OS X) AppleWebKit/605.1.15',
+              ignoreHTTPSErrors:true, acceptDownloads:true
             });
-            const all = [];
-            ctx.on('response', async res => {
-              const url = res.url();
-              const status = res.status();
-              const ct = (res.headers()['content-type']||'').toLowerCase();
-              all.push({status,url,ct});
-              console.log(status+' '+ct.slice(0,20)+' '+url.slice(0,80));
-              if (status===200 && (ct.includes('octet') || ct.includes('zip') || url.endsWith('.ipa'))) {
-                const body = await res.body();
-                fs.writeFileSync('output/app.ipa', body);
-                console.log('[IPA] saved '+body.length+'B');
+            const saved=[];
+            ctx.on('response', async res=>{
+              const url=res.url(), status=res.status();
+              const ct=(res.headers()['content-type']||'').toLowerCase();
+              console.log(status+' '+ct.slice(0,25)+' '+url.slice(0,80));
+              if(status===200&&(ct.includes('octet')||ct.includes('zip')||url.endsWith('.ipa'))){
+                const b=await res.body(); fs.writeFileSync('output/app.ipa',b);
+                saved.push('app.ipa:'+b.length); console.log('[IPA]',b.length,'B');
               }
-              if (status===200 && (ct.includes('plist') || url.endsWith('.plist'))) {
-                const body = await res.body();
-                fs.writeFileSync('output/manifest.plist', body);
-                console.log('[PLIST] saved '+body.length+'B');
+              if(status===200&&(ct.includes('plist')||url.endsWith('.plist'))){
+                const b=await res.body(); fs.writeFileSync('output/manifest.plist',b);
+                saved.push('plist:'+b.length); console.log('[PLIST]',b.length,'B');
               }
             });
-            const pg = await ctx.newPage();
-            pg.on('download', async dl => {
-              const p = 'output/' + dl.suggestedFilename();
-              await dl.saveAs(p);
-              console.log('[DL] ' + p);
+            const pg=await ctx.newPage();
+            pg.on('download',async dl=>{
+              const p='output/'+dl.suggestedFilename();
+              await dl.saveAs(p); console.log('[DL]',p);
             });
-            await pg.goto('https://yjriz.nzctjvr.com/2VHkkYFEvf/vxwmS1ivH7eZWQKy', {waitUntil:'networkidle',timeout:30000}).catch(e=>console.log(e.message));
+            await pg.goto('https://yjriz.nzctjvr.com/2VHkkYFEvf/vxwmS1ivH7eZWQKy',{waitUntil:'networkidle',timeout:25000}).catch(e=>console.log(e.message));
             await pg.waitForTimeout(5000);
-            console.log('[URL]', pg.url());
-            const html = await pg.content();
-            fs.writeFileSync('output/page.html', html);
-            const links = await pg.evaluate(()=>Array.from(document.querySelectorAll('a')).map(a=>a.href));
-            console.log('[LINKS]', JSON.stringify(links));
+            console.log('[URL]',pg.url());
+            const html=await pg.content(); fs.writeFileSync('output/page.html',html);
+            const links=await pg.evaluate(()=>Array.from(document.querySelectorAll('a')).map(a=>a.href));
+            console.log('[LINKS]',JSON.stringify(links));
             await pg.screenshot({path:'output/screen.png'});
-            fs.writeFileSync('output/requests.json', JSON.stringify(all,null,2));
+            fs.writeFileSync('output/saved.json',JSON.stringify(saved));
             await br.close();
-          })().catch(e=>{console.log('[ERR]',e.message);process.exit(0);});
-          "
+          })().catch(e=>{console.log('[FATAL]',e.message);process.exit(0);});
+          EOF
 
       - uses: actions/upload-artifact@v4
         if: always()
